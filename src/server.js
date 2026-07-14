@@ -83,8 +83,7 @@ async function handleText(event) {
   if (!parsed.pickup || !parsed.destination) {
     return reply(
       event.replyToken,
-      "請輸入：上車地點到下車地點、時間、人數
-例如：明天早上8點，東港碼頭到左營高鐵，2位"
+      "請輸入：上車地點到下車地點、時間、人數\n例如：明天早上8點，東港碼頭到左營高鐵，2位"
     );
   }
 
@@ -145,9 +144,7 @@ async function handlePostback(event) {
 
     return reply(
       event.replyToken,
-      `✅ 叫車已確認
-訂單：${orderNo(id)}
-等待管理員或司機接單。`
+      `✅ 叫車已確認\n訂單：${orderNo(id)}\n等待管理員或司機接單。`
     );
   }
 
@@ -481,55 +478,35 @@ app.post("/api/driver/status", driverJwtAuth, async (req, res) => {
 });
 
 async function notifyCustomer(order, action) {
-async function notifyCustomer(order, action) {
   if (!order.customer_line_id) return;
 
-  let lines = [];
+  let text = "";
 
   if (action === "accept") {
-    lines = [
-      "✅ 司機已接單",
-      `訂單：${orderNo(order.id)}`,
-      `司機：${order.driver_name || "OTZ車隊"}`,
-      ...(order.driver_phone
-        ? [`電話：${order.driver_phone}`]
-        : []),
-      ...(order.driver_plate
-        ? [`車牌：${order.driver_plate}`]
-        : []),
-      `確認車資：${order.final_fare || order.estimated_fare} 元`
-    ];
+    text =
+      `✅ 司機已接單\n訂單：${orderNo(order.id)}\n` +
+      `司機：${order.driver_name || "OTZ車隊"}\n` +
+      `${order.driver_phone ? `電話：${order.driver_phone}\n` : ""}` +
+      `${order.driver_plate ? `車牌：${order.driver_plate}\n` : ""}` +
+      `確認車資：${order.final_fare || order.estimated_fare} 元`;
   } else if (action === "start") {
-    lines = [
-      "🚖 行程已開始",
-      `訂單：${orderNo(order.id)}`,
-      "祝您一路平安。"
-    ];
+    text =
+      `🚖 行程已開始\n訂單：${orderNo(order.id)}\n` +
+      `祝您一路平安。`;
   } else if (action === "complete") {
-    lines = [
-      "✅ 行程已完成",
-      `訂單：${orderNo(order.id)}`,
-      "感謝使用 OTZ 車隊。"
-    ];
+    text =
+      `✅ 行程已完成\n訂單：${orderNo(order.id)}\n` +
+      `感謝使用 OTZ 車隊。`;
   } else if (action === "cancel") {
-    lines = [
-      `訂單 ${orderNo(order.id)} 已取消。`
-    ];
+    text = `訂單 ${orderNo(order.id)} 已取消。`;
   }
 
-  if (lines.length === 0) return;
-
-  const text = lines.join("\n");
-
-  await line.pushMessage({
-    to: order.customer_line_id,
-    messages: [
-      {
-        type: "text",
-        text
-      }
-    ]
-  });
+  if (text) {
+    await line.pushMessage({
+      to: order.customer_line_id,
+      messages: [{ type: "text", text }]
+    });
+  }
 }
 
 function reply(replyToken, text) {

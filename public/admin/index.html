@@ -145,7 +145,7 @@ function renderOrders(){
 async function assign(id,estimate){
   const available=driverData.filter(d=>d.is_active);
   if(!available.length){alert("請先建立並啟用司機");return}
-  const choice=prompt("輸入司機ID\\n"+available.map(d=>`${d.id}：${d.name}（${d.status}）`).join("\\n"));
+  const choice=prompt("輸入司機ID\n"+available.map(d=>`${d.id}：${d.name}（${d.status}）`).join("\n"));
   if(!choice)return;
   const finalFare=prompt("確認最終車資",estimate);
   if(finalFare===null)return;
