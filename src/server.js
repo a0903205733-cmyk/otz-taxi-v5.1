@@ -504,7 +504,7 @@ async function notifyCustomer(order, action) {
   if (text) {
     await line.pushMessage({
       to: order.customer_line_id,
-      messages: [{ type: "text", text }]
+      messages: [{ type: "text", text: normalizeLineText(text) }]
     });
   }
 }
@@ -512,8 +512,14 @@ async function notifyCustomer(order, action) {
 function reply(replyToken, text) {
   return line.replyMessage({
     replyToken,
-    messages: [{ type: "text", text }]
+    messages: [{ type: "text", text: normalizeLineText(text) }]
   });
+}
+
+function normalizeLineText(value) {
+  return String(value ?? "")
+    .replace(/\\+r\\+n/g, "\n")
+    .replace(/\\+n/g, "\n");
 }
 
 function adminAuth(req, res, next) {
