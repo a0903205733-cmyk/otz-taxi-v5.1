@@ -481,44 +481,55 @@ app.post("/api/driver/status", driverJwtAuth, async (req, res) => {
 });
 
 async function notifyCustomer(order, action) {
+async function notifyCustomer(order, action) {
   if (!order.customer_line_id) return;
 
-  let text = "";
+  let lines = [];
 
   if (action === "accept") {
-    text =
-      `✅ 司機已接單
-訂單：${orderNo(order.id)}
-` +
-      `司機：${order.driver_name || "OTZ車隊"}
-` +
-      `${order.driver_phone ? `電話：${order.driver_phone}
-` : ""}` +
-      `${order.driver_plate ? `車牌：${order.driver_plate}
-` : ""}` +
-      `確認車資：${order.final_fare || order.estimated_fare} 元`;
+    lines = [
+      "✅ 司機已接單",
+      `訂單：${orderNo(order.id)}`,
+      `司機：${order.driver_name || "OTZ車隊"}`,
+      ...(order.driver_phone
+        ? [`電話：${order.driver_phone}`]
+        : []),
+      ...(order.driver_plate
+        ? [`車牌：${order.driver_plate}`]
+        : []),
+      `確認車資：${order.final_fare || order.estimated_fare} 元`
+    ];
   } else if (action === "start") {
-    text =
-      `🚖 行程已開始\
-訂單：${orderNo(order.id)}
-` +
-      `祝您一路平安。`;
+    lines = [
+      "🚖 行程已開始",
+      `訂單：${orderNo(order.id)}`,
+      "祝您一路平安。"
+    ];
   } else if (action === "complete") {
-    text =
-      `✅ 行程已完成\
-訂單：${orderNo(order.id)}
-` +
-      `感謝使用 OTZ 車隊。`;
+    lines = [
+      "✅ 行程已完成",
+      `訂單：${orderNo(order.id)}`,
+      "感謝使用 OTZ 車隊。"
+    ];
   } else if (action === "cancel") {
-    text = `訂單 ${orderNo(order.id)} 已取消。`;
+    lines = [
+      `訂單 ${orderNo(order.id)} 已取消。`
+    ];
   }
 
-  if (text) {
-    await line.pushMessage({
-      to: order.customer_line_id,
-      messages: [{ type: "text", text }]
-    });
-  }
+  if (lines.length === 0) return;
+
+  const text = lines.join("\n");
+
+  await line.pushMessage({
+    to: order.customer_line_id,
+    messages: [
+      {
+        type: "text",
+        text
+      }
+    ]
+  });
 }
 
 function reply(replyToken, text) {
