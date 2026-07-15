@@ -3,7 +3,10 @@ import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { middleware, messagingApi } from "@line/bot-sdk";
-import { parseRideRequest, classifyRideSchedule, isGroupRideRequest } from "./parser.js";
+import {
+  parseRideRequest, classifyRideSchedule, isGroupRideRequest,
+  hasRideIntent, isPlaceholderPlace, containsUnsupportedArea
+} from "./parser.js";
 import { getRoute, getPickupEtaMinutes, validatePickupLocation } from "./maps.js";
 import { calculateFare } from "./fare.js";
 import { quoteFlex, pickupOnlyFlex, orderNo } from "./messages.js";
@@ -38,11 +41,11 @@ subscribeToFleetChanges(event => {
   for (const client of realtimeClients) client.write(message);
 });
 
-app.get("/", (_req, res) => res.send("OTZ V5.3.5 is running"));
+app.get("/", (_req, res) => res.send("OTZ V5.3.6 is running"));
 app.get("/health", async (_req, res) => {
   const checks = {
     app: "ok",
-    version: "5.3.5",
+    version: "5.3.6",
     line: Boolean(process.env.LINE_CHANNEL_SECRET && process.env.LINE_CHANNEL_ACCESS_TOKEN),
     google_maps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
     supabase: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY),
@@ -84,6 +87,20 @@ async function handleText(event) {
   const isGroupChat = ["group", "room"].includes(event.source?.type);
   const rideText = incomingText.replace(/^我要叫車[，,、:：\s]*/, "");
   const parsed = parseRideRequest(rideText);
+
+  // 私訊與群組使用相同的介入條件。普通聊天在讀取客戶資料與呼叫
+  // Google API 之前就結束，避免誤建訂單與浪費 API 額度。
+  const explicitRideIntent = hasRideIntent(incomingText);
+  if (incomingText !== "我要叫車" && !isGroupRideRequest(incomingText, parsed)) {
+    if (explicitRideIntent && (isPlaceholderPlace(parsed.pickup) || isPlaceholderPlace(parsed.destination))) {
+      return reply(event.replyToken, "請提供可導航的上車或下車地點；『我家／某某家』需先提供完整地址。");
+    }
+    if (explicitRideIntent && containsUnsupportedArea(incomingText)) {
+      return reply(event.replyToken, "OTZ 車隊目前只接受台灣本島行程，不接受國外或外島地點。");
+    }
+    console.log("Ignored non-ride message");
+    return;
+  }
 
   if (isGroupChat) {
     if (incomingText === "我要叫車") {
@@ -1032,5 +1049,5 @@ function driverJwtAuth(req, res, next) {
 }
 
 app.listen(port, "0.0.0.0", () => {
-  console.log(`OTZ V5.3.5 listening on ${port}`);
+  console.log(`OTZ V5.3.6 listening on ${port}`);
 });

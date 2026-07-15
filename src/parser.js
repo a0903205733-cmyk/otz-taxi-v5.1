@@ -92,9 +92,39 @@ export function isGroupRideRequest(text, parsed) {
   if (!parsed?.pickup) return false;
   const compact = String(text || "").replace(/\s+/g, "").trim();
   if (!compact || compact.length > 160) return false;
-  const explicitIntent = /我要叫車|叫車|上車|下車|從.+(?:到|至|前往)/.test(compact);
-  const completeRoute = Boolean(parsed.destination) && /到|至|前往|→|➡|->/.test(compact);
-  return (explicitIntent || completeRoute) && parsed.pickup.length >= 2;
+  const explicitIntent = hasRideIntent(compact);
+  if (!parsed.destination) {
+    return !containsUnsupportedArea(parsed.pickup) && isLikelyLocation(parsed.pickup);
+  }
+  if (!/(?:到|至|前往|→|➡|->)/.test(compact)) return false;
+  if (isPlaceholderPlace(parsed.pickup) || isPlaceholderPlace(parsed.destination)) return false;
+  if (containsUnsupportedArea(`${parsed.pickup} ${parsed.destination}`)) return false;
+  return explicitIntent || isLikelyLocation(parsed.pickup) || isLikelyLocation(parsed.destination);
+}
+
+export function hasRideIntent(text) {
+  return /我要叫車|幫我叫車|叫車|要\s*[一二兩三四五六七八九十\d]+\s*台車|需要\s*[一二兩三四五六七八九十\d]*\s*台車/u.test(String(text || ""));
+}
+
+export function isPlaceholderPlace(value) {
+  const text = String(value || "").replace(/\s+/g, "");
+  if (!text) return true;
+  if (/^(?:我家|你家|他家|她家|自己家|朋友家|客人家|乘客家|某某家)$/u.test(text)) return true;
+  return text !== "全家" && /^[\p{Script=Han}A-Za-z0-9]{1,12}家$/u.test(text);
+}
+
+export function containsUnsupportedArea(value) {
+  const text = String(value || "").replace(/\s+/g, "");
+  return /東京|大阪|京都|北海道|沖繩|日本|韓國|首爾|釜山|中國|香港|澳門|新加坡|馬來西亞|泰國|越南|菲律賓|美國|加拿大|歐洲|迪士尼|金門|澎湖|馬祖|綠島|蘭嶼|小琉球/u.test(text);
+}
+
+function isLikelyLocation(value) {
+  const text = String(value || "").replace(/\s+/g, "");
+  if (!text || isPlaceholderPlace(text)) return false;
+  const known = /東港|林邊|潮州|佳冬|枋寮|屏東|高雄|左營|三民|小港|鳳山|苓雅|前鎮|楠梓|鼓山|鹽埕|旗津|岡山|高醫|長庚|榮總|夢時代|東山|星光|大東港/u;
+  const address = /(?:縣|市|區|鄉|鎮|村|里|路|街|大道|巷|弄|號)/u;
+  const poi = /(?:醫院|診所|車站|高鐵|機場|碼頭|漁港|港口|KTV|ktv|釣蝦場|學校|大學|宮|廟|市場|夜市|飯店|旅館|民宿|餐廳|超商|便利商店|銀行|郵局|分局|分駐所|派出所|公園|館|店|中心)/u;
+  return known.test(text) || address.test(text) || poi.test(text);
 }
 
 function extractRideTime(text) {

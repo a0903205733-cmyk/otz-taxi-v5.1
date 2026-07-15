@@ -111,7 +111,9 @@ export async function getPickupEtaMinutes(latitude, longitude, pickup, apiKey) {
 async function geocodeTaiwanAddress(value, apiKey, label) {
   const originalAddress = String(value || "").trim();
   validateKnownLandmarkConflict(originalAddress, label);
-  let address = normalizeTaiwanPlace(originalAddress);
+  const normalizedPlace = normalizeTaiwanPlace(originalAddress);
+  const knownAlias = normalizedPlace !== originalAddress;
+  let address = normalizedPlace;
   let expectedCity = inferExpectedCity(originalAddress, address);
   if (!expectedCity) {
     // OTZ 的主要營運地在東港。沒有縣市且不是已知地標時，先限縮至
@@ -163,8 +165,18 @@ async function geocodeTaiwanAddress(value, apiKey, label) {
     throw error;
   }
 
-  // Google 對真實門牌也可能回傳 partial_match。縣市吻合且位於
-  // 台灣本島時即可接受，避免因省略村、里、鄰而誤擋。
+  // partial_match 不能只看縣市，否則一般聊天文字也可能被 Google
+  // 勉強配到東港。已知別名、行政區，或路名／門牌／店名確實吻合才接受。
+  if (
+    result.partial_match &&
+    !knownAlias &&
+    !isAdministrativeAreaQuery(originalAddress) &&
+    !hasRelevantPlaceMatch(originalAddress, addressText)
+  ) {
+    const error = new Error(`${label}無法確認為實際地點，請提供店家全名、道路或門牌。`);
+    error.code = "LOCATION_AMBIGUOUS";
+    throw error;
+  }
 
   if (country?.short_name !== "TW" || !inMainIslandBounds || isExcludedIsland) {
     const error = new Error(`${label}不在台灣本島服務範圍內`);
@@ -209,6 +221,21 @@ function inferExpectedCity(original, normalized) {
 
 function normalizeCityText(value) {
   return String(value || "").replace(/臺/g, "台").replace(/\s+/g, "");
+}
+
+function hasRelevantPlaceMatch(original, resolved) {
+  const source = normalizeCityText(original).replace(/[()（）,，]/g, "");
+  const target = normalizeCityText(resolved).replace(/[()（）,，]/g, "");
+  if (source.length >= 2 && target.includes(source)) return true;
+
+  const road = source.match(/([^縣市區鄉鎮村里]{1,15}(?:路|街|大道))/u)?.[1];
+  const number = source.match(/(\d+(?:之\d+|-\d+)?號)/u)?.[1];
+  if (road && number) return target.includes(road) && target.includes(number);
+
+  const poiName = source
+    .replace(/^(?:屏東縣|高雄市|東港鎮|林邊鄉|潮州鎮|佳冬鄉|枋寮鄉)/u, "")
+    .replace(/(?:KTV|ktv|醫院|車站|碼頭|釣蝦場|店|館|中心)$/u, "");
+  return poiName.length >= 2 && target.includes(poiName);
 }
 
 function normalizeTaiwanPlace(value) {
