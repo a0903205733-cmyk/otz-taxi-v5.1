@@ -106,7 +106,7 @@ function normalizeTaiwanPlace(value) {
       address: "東港鎮海宮, 屏東縣東港鎮鎮海里鎮海路42號之5"
     },
     {
-      matches: ["高雄榮總", "高雄榮民總醫院", "高榮"],
+      matches: ["榮總", "高雄榮總", "高雄榮民總醫院", "高榮"],
       address: "高雄榮民總醫院, 高雄市左營區大中一路386號"
     },
     {
