@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { middleware, messagingApi } from "@line/bot-sdk";
-import { parseRideRequest, parseScheduledAt } from "./parser.js";
+import { parseRideRequest, classifyRideSchedule, isGroupRideRequest } from "./parser.js";
 import { getRoute, getPickupEtaMinutes } from "./maps.js";
 import { calculateFare } from "./fare.js";
 import { quoteFlex, orderNo } from "./messages.js";
@@ -38,11 +38,11 @@ subscribeToFleetChanges(event => {
   for (const client of realtimeClients) client.write(message);
 });
 
-app.get("/", (_req, res) => res.send("OTZ V5.2.3 is running"));
+app.get("/", (_req, res) => res.send("OTZ V5.3.0 is running"));
 app.get("/health", async (_req, res) => {
   const checks = {
     app: "ok",
-    version: "5.2.3",
+    version: "5.3.0",
     line: Boolean(process.env.LINE_CHANNEL_SECRET && process.env.LINE_CHANNEL_ACCESS_TOKEN),
     google_maps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
     supabase: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY),
@@ -81,6 +81,25 @@ async function handleLineEvent(event) {
 
 async function handleText(event) {
   const incomingText = String(event.message.text || "").trim();
+  const isGroupChat = ["group", "room"].includes(event.source?.type);
+  const rideText = incomingText.replace(/^我要叫車[，,、:：\s]*/, "");
+  const parsed = parseRideRequest(rideText);
+
+  if (isGroupChat) {
+    if (incomingText === "我要叫車") {
+      const groupSettings = await listSettings();
+      return reply(
+        event.replyToken,
+        groupSettings.line_welcome_message ||
+          "請輸入：上車地點到下車地點、時間、人數\n例如：明天早上八點，東港到林邊，2位"
+      );
+    }
+    if (!isGroupRideRequest(incomingText, parsed)) {
+      console.log("Ignored non-ride group message");
+      return;
+    }
+  }
+
   const settings = await listSettings();
 
   // 這些文字通常來自 LINE 圖文選單或其他官方帳號功能。
@@ -101,8 +120,6 @@ async function handleText(event) {
     return reply(event.replyToken, "此帳號目前無法使用自動叫車，請聯絡 OTZ 車隊客服。");
   }
 
-  const parsed = parseRideRequest(incomingText);
-
   if (!parsed.pickup || !parsed.destination) {
     return reply(
       event.replyToken,
@@ -112,6 +129,7 @@ async function handleText(event) {
   }
 
   try {
+    const schedule = classifyRideSchedule(parsed.rideTime);
     const route = await getRoute(
       parsed.pickup,
       parsed.destination,
@@ -131,8 +149,8 @@ async function handleText(event) {
       pickup: parsed.pickup,
       destination: parsed.destination,
       ride_time: parsed.rideTime || null,
-      is_reservation: Boolean(parsed.rideTime),
-      scheduled_at: parseScheduledAt(parsed.rideTime),
+      is_reservation: schedule.isReservation,
+      scheduled_at: schedule.scheduledAt,
       passengers: parsed.passengers,
       pickup_latitude: route.originLocation?.latitude ?? null,
       pickup_longitude: route.originLocation?.longitude ?? null,
@@ -154,6 +172,9 @@ async function handleText(event) {
     });
   } catch (error) {
     console.error("Quote error:", error);
+    if (["INVALID_RIDE_TIME", "RIDE_TIME_EXPIRED"].includes(error.code)) {
+      return reply(event.replyToken, `⚠️ ${error.message}`);
+    }
     if (["LOCATION_OUTSIDE_TAIWAN", "LOCATION_AMBIGUOUS", "LOCATION_CONFLICT"].includes(error.code)) {
       return reply(event.replyToken, `⚠️ ${error.message}\nOTZ 車隊目前只接受台灣本島的上下車地點，不接受外島或國外行程。`);
     }
@@ -620,14 +641,15 @@ app.get("/api/admin/orders/:id/receipt", adminAuth, async (req, res) => {
 app.post("/api/admin/orders/:id/rebook", adminAuth, async (req, res) => {
   try {
     const source = await getOrder(Number(req.params.id));
+    const schedule = classifyRideSchedule(req.body.rideTime);
     const duplicate = await createOrder({
       customer_line_id: source.customer_line_id,
       customer_phone: source.customer_phone,
       pickup: source.pickup,
       destination: source.destination,
       ride_time: req.body.rideTime || null,
-      is_reservation: Boolean(req.body.rideTime),
-      scheduled_at: parseScheduledAt(req.body.rideTime),
+      is_reservation: schedule.isReservation,
+      scheduled_at: schedule.scheduledAt,
       passengers: source.passengers,
       pickup_latitude: source.pickup_latitude,
       pickup_longitude: source.pickup_longitude,
@@ -645,6 +667,9 @@ app.post("/api/admin/orders/:id/rebook", adminAuth, async (req, res) => {
     await createAuditLog({ actor_type: "admin", action: "order.rebook", entity_type: "order", entity_id: String(duplicate.id), details: { source_order_id: source.id } });
     res.status(201).json(duplicate);
   } catch (error) {
+    if (["INVALID_RIDE_TIME", "RIDE_TIME_EXPIRED"].includes(error.code)) {
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -973,5 +998,5 @@ function driverJwtAuth(req, res, next) {
 }
 
 app.listen(port, "0.0.0.0", () => {
-  console.log(`OTZ V5.2.3 listening on ${port}`);
+  console.log(`OTZ V5.3.0 listening on ${port}`);
 });

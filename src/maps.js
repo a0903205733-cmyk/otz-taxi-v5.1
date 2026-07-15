@@ -146,7 +146,8 @@ async function geocodeTaiwanAddress(value, apiKey, label) {
 
   validateAdministrativeHint(originalAddress, addressText, label);
 
-  if (result.partial_match) {
+  const trustedNormalizedPlace = address !== originalAddress || isAdministrativeAreaQuery(originalAddress);
+  if (result.partial_match && !trustedNormalizedPlace) {
     const error = new Error(`${label}只能部分符合，請輸入更完整的縣市、區域、地址或地標全名`);
     error.code = "LOCATION_AMBIGUOUS";
     throw error;
@@ -171,6 +172,17 @@ function normalizeTaiwanPlace(value) {
   const text = String(value || "").trim();
   const compact = text.replace(/[\s()（）]/g, "");
   const aliases = [
+    { exactOnly: true, matches: ["東港", "東港鎮"], address: "屏東縣東港鎮" },
+    { exactOnly: true, matches: ["林邊", "林邊鄉"], address: "屏東縣林邊鄉" },
+    { exactOnly: true, matches: ["潮州", "潮州鎮"], address: "屏東縣潮州鎮" },
+    { exactOnly: true, matches: ["佳冬", "佳冬鄉"], address: "屏東縣佳冬鄉" },
+    { exactOnly: true, matches: ["枋寮", "枋寮鄉"], address: "屏東縣枋寮鄉" },
+    { exactOnly: true, matches: ["高雄", "高雄市"], address: "高雄市" },
+    { exactOnly: true, matches: ["台北", "臺北", "台北市", "臺北市"], address: "臺北市" },
+    {
+      matches: ["林邊分局", "林邊分駐所"],
+      address: "屏東縣政府警察局東港分局林邊分駐所"
+    },
     {
       matches: ["夢時代", "高雄夢時代", "統一夢時代", "統一夢時代購物中心"],
       address: "統一夢時代購物中心 高雄市前鎮區中華五路789號"
@@ -198,9 +210,18 @@ function normalizeTaiwanPlace(value) {
   ];
 
   const alias = aliases.find(item =>
-    item.matches.some(name => compact === name || compact.includes(name))
+    item.matches.some(name => compact === name || (!item.exactOnly && compact.includes(name)))
   );
   return alias?.address || text;
+}
+
+function isAdministrativeAreaQuery(value) {
+  const compact = String(value || "").replace(/[\s()（）]/g, "");
+  return [
+    "東港", "東港鎮", "林邊", "林邊鄉", "潮州", "潮州鎮",
+    "佳冬", "佳冬鄉", "枋寮", "枋寮鄉", "高雄", "高雄市",
+    "台北", "臺北", "台北市", "臺北市"
+  ].includes(compact);
 }
 
 function validateKnownLandmarkConflict(original, label) {
