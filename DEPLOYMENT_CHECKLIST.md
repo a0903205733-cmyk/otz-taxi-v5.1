@@ -1,4 +1,4 @@
-# OTZ V5.3.4 正式版部署核對表
+# OTZ V5.3.5 正式版部署核對表
 
 ## 部署
 
@@ -6,7 +6,7 @@
 - [ ] GitHub 根目錄已完整覆蓋為本版本
 - [ ] GitHub 沒有上傳 `.env` 或任何 Secret
 - [ ] Railway 已完成最新 commit 的部署
-- [ ] `/health` 顯示 `version: 5.3.4`
+- [ ] `/health` 顯示 `version: 5.3.5`
 - [ ] `/health` 的 line、google_maps、supabase、jwt、realtime 都是 true
 
 ## 客戶 LINE

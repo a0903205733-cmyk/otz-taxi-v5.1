@@ -148,17 +148,17 @@ function extractPassengerCount(text) {
   const source = String(text || "");
   let match = source.match(/([零〇一二兩三四五六七八九十\d]+)\s*大\s*([零〇一二兩三四五六七八九十\d]+)\s*小/u);
   if (match) return toCount(match[1]) + toCount(match[2]);
-  match = source.match(/(?:人數|乘客)[：:\s]*([零〇一二兩三四五六七八九十\d]+)\s*(?:位|人)?/u);
+  match = source.match(/(?:人數|乘客)[：:\s]*([零〇一二兩三四五六七八九十\d]+)\s*(?:位|個人|人)?/u);
   if (match) return toCount(match[1]);
-  match = source.match(/([零〇一二兩三四五六七八九十\d]+)\s*(?:位|人)(?:乘客)?/u);
+  match = source.match(/([零〇一二兩三四五六七八九十\d]+)\s*(?:位|個人|人)(?:乘客)?/u);
   return match ? toCount(match[1]) : null;
 }
 
 function removePassengerText(text) {
   return String(text || "")
     .replace(/[零〇一二兩三四五六七八九十\d]+\s*大\s*[零〇一二兩三四五六七八九十\d]+\s*小/gu, " ")
-    .replace(/(?:人數|乘客)[：:\s]*[零〇一二兩三四五六七八九十\d]+\s*(?:位|人)?/gu, " ")
-    .replace(/[零〇一二兩三四五六七八九十\d]+\s*(?:位|人)(?:乘客)?/gu, " ");
+    .replace(/(?:人數|乘客)[：:\s]*[零〇一二兩三四五六七八九十\d]+\s*(?:位|個人|人)?/gu, " ")
+    .replace(/[零〇一二兩三四五六七八九十\d]+\s*(?:位|個人|人)(?:乘客)?/gu, " ");
 }
 
 function toCount(value) {
