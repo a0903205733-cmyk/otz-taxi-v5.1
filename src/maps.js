@@ -1,4 +1,4 @@
-export async function getRoute(origin, destination, apiKey) {
+export async function getRoute(origin, destination, apiKey, fareSettings = {}) {
   const [validatedOrigin, validatedDestination] = await Promise.all([
     geocodeTaiwanAddress(origin, apiKey, "上車地點"),
     geocodeTaiwanAddress(destination, apiKey, "下車地點")
@@ -16,6 +16,7 @@ export async function getRoute(origin, destination, apiKey) {
       destination: { location: { latLng: validatedDestination.location } },
       travelMode: "DRIVE",
       routingPreference: "TRAFFIC_AWARE",
+      computeAlternativeRoutes: true,
       languageCode: "zh-TW",
       units: "METRIC"
     })
@@ -24,19 +25,88 @@ export async function getRoute(origin, destination, apiKey) {
   const raw = await response.text();
   if (!response.ok) throw new Error(`Routes API ${response.status}: ${raw}`);
 
-  const route = JSON.parse(raw).routes?.[0];
-  if (!route) throw new Error("找不到路線");
+  const routes = JSON.parse(raw).routes || [];
+  if (!routes.length) throw new Error("找不到路線");
+
+  const perKm = Number(fareSettings.per_km ?? process.env.PER_KM ?? 20);
+  const perMinute = Number(fareSettings.per_minute ?? process.env.PER_MINUTE ?? 2);
+  const candidates = routes.map(route => {
+    const distanceKm = route.distanceMeters / 1000;
+    const durationMin = Number(String(route.duration).replace("s", "")) / 60;
+    return {
+      distanceKm,
+      durationMin,
+      score: distanceKm * perKm + durationMin * perMinute
+    };
+  }).filter(route => Number.isFinite(route.distanceKm) && Number.isFinite(route.durationMin));
+
+  candidates.sort((a, b) => a.score - b.score || a.durationMin - b.durationMin);
+  const route = candidates[0];
+  if (!route) throw new Error("找不到有效路線");
 
   return {
-    distanceKm: route.distanceMeters / 1000,
-    durationMin: Number(String(route.duration).replace("s", "")) / 60,
+    distanceKm: route.distanceKm,
+    durationMin: route.durationMin,
+    alternativesEvaluated: candidates.length,
     originAddress: validatedOrigin.formattedAddress,
-    destinationAddress: validatedDestination.formattedAddress
+    destinationAddress: validatedDestination.formattedAddress,
+    originLocation: validatedOrigin.location,
+    destinationLocation: validatedDestination.location
   };
+}
+
+export async function getPickupEtaMinutes(latitude, longitude, pickup, apiKey) {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    throw new Error("DRIVER_LOCATION_REQUIRED");
+  }
+
+  // Driver GPS must also be on Taiwan's main island.
+  if (lat < 21.75 || lat > 25.35 || lng < 120 || lng > 122) {
+    throw new Error("DRIVER_LOCATION_OUTSIDE_TAIWAN");
+  }
+
+  const destinationLocation = pickup && typeof pickup === "object"
+    ? { latitude: Number(pickup.latitude), longitude: Number(pickup.longitude) }
+    : (await geocodeTaiwanAddress(pickup, apiKey, "上車地點")).location;
+  if (!Number.isFinite(destinationLocation.latitude) || !Number.isFinite(destinationLocation.longitude)) {
+    throw new Error("PICKUP_LOCATION_REQUIRED");
+  }
+  const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": apiKey,
+      "X-Goog-FieldMask": "routes.duration,routes.distanceMeters"
+    },
+    body: JSON.stringify({
+      origin: { location: { latLng: { latitude: lat, longitude: lng } } },
+      destination: { location: { latLng: destinationLocation } },
+      travelMode: "DRIVE",
+      routingPreference: "TRAFFIC_AWARE",
+      computeAlternativeRoutes: true,
+      languageCode: "zh-TW",
+      units: "METRIC"
+    })
+  });
+
+  const raw = await response.text();
+  if (!response.ok) throw new Error(`Routes API ${response.status}: ${raw}`);
+  const routes = JSON.parse(raw).routes || [];
+  const candidates = routes.map(route => ({
+    durationMin: Number(String(route.duration || "").replace("s", "")) / 60,
+    distanceKm: Number(route.distanceMeters || 0) / 1000
+  })).filter(route => Number.isFinite(route.durationMin) && route.durationMin >= 0);
+
+  candidates.sort((a, b) => a.durationMin - b.durationMin || a.distanceKm - b.distanceKm);
+  if (!candidates.length) throw new Error("NO_PICKUP_ROUTE");
+  return candidates[0];
 }
 
 async function geocodeTaiwanAddress(value, apiKey, label) {
   const originalAddress = String(value || "").trim();
+  validateKnownLandmarkConflict(originalAddress, label);
   const address = normalizeTaiwanPlace(originalAddress);
   if (!address) throw new Error(`${label}不能空白`);
 
@@ -102,6 +172,10 @@ function normalizeTaiwanPlace(value) {
   const compact = text.replace(/[\s()（）]/g, "");
   const aliases = [
     {
+      matches: ["夢時代", "高雄夢時代", "統一夢時代", "統一夢時代購物中心"],
+      address: "統一夢時代購物中心 高雄市前鎮區中華五路789號"
+    },
+    {
       matches: ["東港鎮海宮", "東港鎮海里鎮海宮", "東港海宮"],
       address: "東港鎮海宮, 屏東縣東港鎮鎮海里鎮海路42號之5"
     },
@@ -127,6 +201,35 @@ function normalizeTaiwanPlace(value) {
     item.matches.some(name => compact === name || compact.includes(name))
   );
   return alias?.address || text;
+}
+
+function validateKnownLandmarkConflict(original, label) {
+  const compact = String(original || "").replace(/\s+/g, "");
+  const conflicts = [
+    {
+      landmark: "夢時代",
+      allowedCities: ["高雄", "前鎮"],
+      conflictingCities: [
+        "台北", "臺北", "新北", "桃園", "新竹", "苗栗", "台中", "臺中",
+        "彰化", "南投", "雲林", "嘉義", "台南", "臺南", "屏東", "宜蘭",
+        "花蓮", "台東", "臺東", "基隆"
+      ],
+      correctPlace: "高雄市前鎮區的統一夢時代購物中心"
+    }
+  ];
+
+  for (const rule of conflicts) {
+    if (!compact.includes(rule.landmark)) continue;
+    const conflictingCity = rule.conflictingCities.find(city => compact.includes(city));
+    if (!conflictingCity) continue;
+
+    const error = new Error(
+      `${label}「${original}」地點矛盾：${rule.landmark}位於${rule.correctPlace}，` +
+      `不在${conflictingCity}。請重新輸入正確地點。`
+    );
+    error.code = "LOCATION_CONFLICT";
+    throw error;
+  }
 }
 
 function validateAdministrativeHint(original, resolved, label) {

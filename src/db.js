@@ -30,6 +30,24 @@ export async function updateOrder(id, values) {
   return data;
 }
 
+export async function claimOrder(orderId, driverId, finalFare = null) {
+  const { data, error } = await db.rpc("claim_order", {
+    p_order_id: orderId,
+    p_driver_id: driverId,
+    p_final_fare: finalFare
+  });
+  if (error) throw error;
+
+  // claim_order returns SETOF orders so PostgREST does not try to coerce a
+  // missing/ambiguous result into one JSON object. The RPC must return exactly
+  // one claimed order on success.
+  const claimed = Array.isArray(data) ? data[0] : data;
+  if (!claimed) {
+    throw new Error("CLAIM_ORDER_EMPTY_RESULT");
+  }
+  return claimed;
+}
+
 export async function listDrivers() {
   const { data, error } = await db.from("drivers").select("*").order("name");
   if (error) throw error;

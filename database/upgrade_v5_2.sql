@@ -17,14 +17,96 @@ alter table public.drivers
   add column if not exists vehicle_id bigint references public.vehicles(id) on delete set null,
   add column if not exists member_role text not null default 'driver'
     check (member_role in ('driver', 'dispatcher', 'manager')),
-  add column if not exists joined_at timestamptz not null default now();
+  add column if not exists joined_at timestamptz not null default now(),
+  add column if not exists current_latitude double precision,
+  add column if not exists current_longitude double precision,
+  add column if not exists last_location_at timestamptz;
+
+create index if not exists drivers_last_location_idx
+  on public.drivers(last_location_at desc);
 
 alter table public.orders
   add column if not exists customer_phone text,
+  add column if not exists pickup_latitude double precision,
+  add column if not exists pickup_longitude double precision,
+  add column if not exists is_reservation boolean not null default false,
+  add column if not exists scheduled_at timestamptz,
   add column if not exists payment_method text,
   add column if not exists payment_status text not null default 'unpaid'
     check (payment_status in ('unpaid', 'paid', 'refunded')),
   add column if not exists paid_at timestamptz;
+
+update public.orders
+set is_reservation = true
+where is_reservation = false and nullif(trim(ride_time), '') is not null;
+
+create index if not exists orders_driver_active_idx
+  on public.orders(assigned_driver_id, status, is_reservation);
+
+drop function if exists public.claim_order(bigint, bigint, integer);
+
+create function public.claim_order(
+  p_order_id bigint,
+  p_driver_id bigint,
+  p_final_fare integer default null
+)
+returns setof public.orders
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_order public.orders;
+  target_driver public.drivers;
+  updated_order public.orders;
+begin
+  perform pg_advisory_xact_lock(p_driver_id);
+
+  select * into target_order from public.orders where id = p_order_id for update;
+  if target_order.id is null then raise exception 'ORDER_NOT_FOUND'; end if;
+  if target_order.status <> 'pending' then raise exception 'ORDER_NOT_PENDING'; end if;
+
+  select * into target_driver from public.drivers where id = p_driver_id;
+  if target_driver.id is null or not target_driver.is_active then
+    raise exception 'DRIVER_NOT_AVAILABLE';
+  end if;
+
+  if not target_order.is_reservation and exists (
+    select 1 from public.orders
+    where assigned_driver_id = p_driver_id
+      and status = 'accepted'
+      and is_reservation = false
+  ) then
+    raise exception 'DRIVER_HAS_ACTIVE_ORDER';
+  end if;
+
+  if exists (
+    select 1 from public.orders
+    where assigned_driver_id = p_driver_id
+      and status = 'accepted'
+      and is_reservation = true
+      and scheduled_at is not null
+      and scheduled_at <= now() + interval '30 minutes'
+  ) then
+    raise exception 'DRIVER_HAS_IMMINENT_RESERVATION';
+  end if;
+
+  update public.orders set
+    status = 'accepted',
+    assigned_driver_id = target_driver.id,
+    driver_name = target_driver.name,
+    driver_phone = target_driver.phone,
+    driver_plate = target_driver.plate,
+    final_fare = coalesce(p_final_fare, target_order.estimated_fare),
+    accepted_at = now()
+  where id = p_order_id
+  returning * into updated_order;
+
+  update public.drivers set status = 'busy' where id = p_driver_id;
+  return next updated_order;
+  return;
+end;
+$$;
 
 create table if not exists public.customers (
   id bigint generated always as identity primary key,

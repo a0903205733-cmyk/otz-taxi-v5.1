@@ -28,6 +28,7 @@ button.green{background:var(--green)}button.blue{background:var(--blue);color:#f
 <section id="profileCard" class="card" style="display:none">
   <b id="driverName"></b><br>
   <span id="driverInfo"></span><br><br>
+  <div id="locationStatus" class="meta">GPS：等待定位授權</div><br>
   <select id="status" onchange="changeStatus()">
     <option value="available">待命</option>
     <option value="busy">載客中</option>
@@ -43,6 +44,7 @@ button.green{background:var(--green)}button.blue{background:var(--blue);color:#f
 let authToken=localStorage.getItem("otzDriverJwt")||"";
 let me=null;
 let eventSource=null,previousPending=new Set();
+let gpsWatchId=null,lastLocationSentAt=0,lastGpsPosition=null;
 
 async function api(url,opt={}){
   opt.headers={...(opt.headers||{})};
@@ -79,6 +81,7 @@ async function init(){
     status.value=me.status;
     await refresh();
     connectRealtime();
+    startGps();
   }catch(e){
     logout();
   }
@@ -95,13 +98,14 @@ async function refresh(){
 function card(o){
   const mine=Number(o.assigned_driver_id)===Number(me.id);
   return `<section class="card">
-    <b>OTZ-${String(o.id).padStart(6,"0")}</b>
+    <b>OTZ-${String(o.id).padStart(6,"0")}</b>${o.is_reservation?"｜📅 預約單":""}
     <div class="route">${esc(o.pickup)} → ${esc(o.destination)}</div>
     <div class="meta">
       預約：${esc(o.ride_time||"未提供")}<br>
       人數：${o.passengers||"未提供"} 位<br>
       車資：${o.final_fare||o.estimated_fare||0} 元
     </div>
+    ${o.status==="pending"&&o.pickup_eta_minutes!=null?`<div class="meta">距上車點：約 ${o.pickup_eta_minutes} 分鐘／${o.pickup_distance_km} 公里（Google 最佳駕車路線）</div>`:""}
     <div class="actions">
       ${o.status==="pending"?`<button onclick="claim(${o.id})">我要接單</button>`:""}
       ${mine&&o.status==="accepted"&&!o.started_at?`<button class="blue" onclick="action(${o.id},'start')">開始行程</button>`:""}
@@ -150,6 +154,45 @@ function logout(){
   profileCard.style.display="none";
   list.innerHTML="";
   if(eventSource){eventSource.close();eventSource=null}
+  if(gpsWatchId!=null){navigator.geolocation.clearWatch(gpsWatchId);gpsWatchId=null}
+}
+
+function startGps(){
+  if(!navigator.geolocation){
+    locationStatus.textContent="GPS：此裝置不支援定位，無法接收附近訂單";
+    return;
+  }
+  if(gpsWatchId!=null)return;
+  gpsWatchId=navigator.geolocation.watchPosition(sendLocation,locationError,{
+    enableHighAccuracy:true,maximumAge:30000,timeout:15000
+  });
+}
+
+async function sendLocation(position,force=false){
+  lastGpsPosition=position;
+  const now=Date.now();
+  // GPS callbacks can be very frequent. A location heartbeat is enough; the
+  // backend controls when a Google route lookup is actually necessary.
+  if(!force&&now-lastLocationSentAt<90000)return;
+  try{
+    await api("/api/driver/location",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        latitude:position.coords.latitude,
+        longitude:position.coords.longitude,
+        accuracy:position.coords.accuracy
+      })
+    });
+    lastLocationSentAt=now;
+    locationStatus.textContent=`GPS：已定位（誤差約 ${Math.round(position.coords.accuracy)} 公尺）`;
+    await refresh();
+  }catch(e){locationStatus.textContent=`GPS：${e.message}`}
+}
+
+function locationError(error){
+  const messages={1:"請允許位置權限，否則不會顯示附近訂單",2:"目前無法取得位置",3:"定位逾時，正在重試"};
+  locationStatus.textContent=`GPS：${messages[error.code]||error.message}`;
 }
 
 function connectRealtime(){
@@ -181,7 +224,10 @@ function nav(place){
 
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
 
-setInterval(()=>{if(authToken)refresh()},5000);
+// Realtime handles ordinary updates. This is only a low-frequency fallback;
+// Google route results are cached by the backend.
+setInterval(()=>{if(authToken)refresh()},30000);
+setInterval(()=>{if(authToken&&lastGpsPosition)sendLocation(lastGpsPosition,true)},90000);
 if(authToken)init();
 </script>
 </body>

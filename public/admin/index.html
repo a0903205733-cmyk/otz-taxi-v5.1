@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OTZ 車隊管理後台 V5.2</title>
+<title>OTZ 車隊管理後台 V5.2.1</title>
 <style>
 :root{--bg:#0b0b0c;--panel:#171719;--panel2:#232326;--gold:#d8b64f;--text:#f4f4f5;--muted:#aaa;--line:#333;--green:#1fc76a;--red:#e45151;--blue:#4b89ff}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui}
@@ -20,7 +20,7 @@ button.red{background:var(--red);color:#fff}button.green{background:var(--green)
 </style>
 </head>
 <body>
-<header>OTZ 車隊管理後台 V5.2</header>
+<header>OTZ 車隊管理後台 V5.2.1</header>
 <main>
 <section class="panel toolbar">
   <input id="adminToken" type="password" placeholder="管理密碼">
@@ -97,7 +97,9 @@ adminToken.value=token;
 async function api(url,opt={}){
   opt.headers={...(opt.headers||{}),"x-admin-token":token};
   const r=await fetch(url,opt);
-  const data=await r.json();
+  const raw=await r.text();
+  let data;
+  try{data=raw?JSON.parse(raw):{}}catch{throw new Error(`API 回傳格式錯誤（${r.status}）：請確認前後端版本一致`)}
   if(!r.ok) throw new Error(data.error||"操作失敗");
   return data;
 }
@@ -191,7 +193,7 @@ function renderDrivers(){
 function renderOrders(){
   const card=o=>`
     <div class="order">
-      <b>OTZ-${String(o.id).padStart(6,"0")}</b>｜${esc(o.status)}
+      <b>OTZ-${String(o.id).padStart(6,"0")}</b>｜${esc(o.status)}${o.is_reservation?"｜📅 預約單":""}
       <div class="route">${esc(o.pickup)} → ${esc(o.destination)}</div>
       <div class="meta">
         預約：${esc(o.ride_time||"未提供")}｜車資：${o.final_fare||o.estimated_fare||0} 元<br>

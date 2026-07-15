@@ -3,12 +3,12 @@ import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { middleware, messagingApi } from "@line/bot-sdk";
-import { parseRideRequest } from "./parser.js";
-import { getRoute } from "./maps.js";
+import { parseRideRequest, parseScheduledAt } from "./parser.js";
+import { getRoute, getPickupEtaMinutes } from "./maps.js";
 import { calculateFare } from "./fare.js";
 import { quoteFlex, orderNo } from "./messages.js";
 import {
-  createOrder, listOrders, getOrder, updateOrder,
+  createOrder, listOrders, getOrder, updateOrder, claimOrder,
   listDrivers, createDriver, updateDriver,
   getDriverByUsername, getDriverById,
   listVehicles, getVehicleById, createVehicle, updateVehicle,
@@ -28,17 +28,21 @@ const line = new messagingApi.MessagingApiClient({
 });
 
 const realtimeClients = new Set();
+const pickupEtaCache = new Map();
+const PICKUP_ETA_LIMIT_MINUTES = 20;
+const LOCATION_MAX_AGE_MS = 2 * 60 * 1000;
+const ETA_CACHE_MS = 5 * 60 * 1000;
 
 subscribeToFleetChanges(event => {
   const message = `data: ${JSON.stringify(event)}\n\n`;
   for (const client of realtimeClients) client.write(message);
 });
 
-app.get("/", (_req, res) => res.send("OTZ V5.2 is running"));
+app.get("/", (_req, res) => res.send("OTZ V5.2.1 is running"));
 app.get("/health", async (_req, res) => {
   const checks = {
     app: "ok",
-    version: "5.2.0",
+    version: "5.2.1",
     line: Boolean(process.env.LINE_CHANNEL_SECRET && process.env.LINE_CHANNEL_ACCESS_TOKEN),
     google_maps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
     supabase: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY),
@@ -111,7 +115,8 @@ async function handleText(event) {
     const route = await getRoute(
       parsed.pickup,
       parsed.destination,
-      process.env.GOOGLE_MAPS_API_KEY
+      process.env.GOOGLE_MAPS_API_KEY,
+      settings
     );
 
     const toll = Number(settings.default_toll ?? process.env.DEFAULT_TOLL ?? 0);
@@ -126,7 +131,11 @@ async function handleText(event) {
       pickup: parsed.pickup,
       destination: parsed.destination,
       ride_time: parsed.rideTime || null,
+      is_reservation: Boolean(parsed.rideTime),
+      scheduled_at: parseScheduledAt(parsed.rideTime),
       passengers: parsed.passengers,
+      pickup_latitude: route.originLocation?.latitude ?? null,
+      pickup_longitude: route.originLocation?.longitude ?? null,
       distance_km: Number(route.distanceKm.toFixed(2)),
       duration_min: Number(route.durationMin.toFixed(2)),
       base_fare: fare.baseFare,
@@ -145,7 +154,7 @@ async function handleText(event) {
     });
   } catch (error) {
     console.error("Quote error:", error);
-    if (["LOCATION_OUTSIDE_TAIWAN", "LOCATION_AMBIGUOUS"].includes(error.code)) {
+    if (["LOCATION_OUTSIDE_TAIWAN", "LOCATION_AMBIGUOUS", "LOCATION_CONFLICT"].includes(error.code)) {
       return reply(event.replyToken, `⚠️ ${error.message}\nOTZ 車隊目前只接受台灣本島的上下車地點，不接受外島或國外行程。`);
     }
     return reply(event.replyToken, "目前無法完成估價，請稍後再試。");
@@ -446,23 +455,19 @@ app.post("/api/admin/orders/:id/assign", adminAuth, async (req, res) => {
       return res.status(404).json({ error: "找不到可用司機" });
     }
 
-    const updated = await updateOrder(order.id, {
-      status: "accepted",
-      assigned_driver_id: driver.id,
-      driver_name: driver.name,
-      driver_phone: driver.phone,
-      driver_plate: driver.plate,
-      final_fare: Number(req.body.finalFare || order.estimated_fare),
-      accepted_at: new Date().toISOString()
-    });
+    const updated = await claimOrder(
+      order.id,
+      driver.id,
+      Number(req.body.finalFare || order.estimated_fare)
+    );
 
     await createAuditLog({ actor_type: "admin", action: "order.assign", entity_type: "order", entity_id: String(order.id), details: { driver_id: driver.id, final_fare: updated.final_fare } });
 
-    await updateDriver(driver.id, { status: "busy" });
     await notifyCustomer(updated, "accept");
 
     res.json(updated);
   } catch (error) {
+    if (sendClaimError(res, error)) return;
     res.status(500).json({ error: error.message });
   }
 });
@@ -615,7 +620,11 @@ app.post("/api/admin/orders/:id/rebook", adminAuth, async (req, res) => {
       pickup: source.pickup,
       destination: source.destination,
       ride_time: req.body.rideTime || null,
+      is_reservation: Boolean(req.body.rideTime),
+      scheduled_at: parseScheduledAt(req.body.rideTime),
       passengers: source.passengers,
+      pickup_latitude: source.pickup_latitude,
+      pickup_longitude: source.pickup_longitude,
       distance_km: source.distance_km,
       duration_min: source.duration_min,
       base_fare: source.base_fare,
@@ -663,15 +672,48 @@ app.get("/api/driver/me", driverJwtAuth, async (req, res) => {
   }
 });
 
+app.post("/api/driver/location", driverJwtAuth, async (req, res) => {
+  try {
+    const latitude = Number(req.body.latitude);
+    const longitude = Number(req.body.longitude);
+    const accuracy = Number(req.body.accuracy);
+
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      return res.status(400).json({ error: "無法取得有效的 GPS 定位" });
+    }
+    if (latitude < 21.75 || latitude > 25.35 || longitude < 120 || longitude > 122) {
+      return res.status(400).json({ error: "司機目前位置不在台灣本島範圍" });
+    }
+    if (Number.isFinite(accuracy) && accuracy > 1000) {
+      return res.status(400).json({ error: "GPS 定位誤差過大，請移至訊號較佳處" });
+    }
+
+    const updated = await updateDriver(req.driver.driverId, {
+      current_latitude: latitude,
+      current_longitude: longitude,
+      last_location_at: new Date().toISOString()
+    });
+    res.json({
+      latitude: updated.current_latitude,
+      longitude: updated.current_longitude,
+      last_location_at: updated.last_location_at
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get("/api/driver/orders", driverJwtAuth, async (req, res) => {
   try {
     const orders = await listOrders();
-
-    const visible = orders.filter(order =>
-      order.status === "pending" ||
-      (order.status === "accepted" &&
-       Number(order.assigned_driver_id) === Number(req.driver.driverId))
+    const driver = await getDriverById(req.driver.driverId);
+    const ownOrders = orders.filter(order =>
+      order.status === "accepted" &&
+      Number(order.assigned_driver_id) === Number(driver.id)
     );
+    const pendingOrders = orders.filter(order => order.status === "pending");
+    const nearbyOrders = await filterNearbyPickupOrders(driver, pendingOrders);
+    const visible = [...ownOrders, ...nearbyOrders];
 
     res.json(visible);
   } catch (error) {
@@ -693,23 +735,22 @@ app.post("/api/driver/orders/:id/claim", driverJwtAuth, async (req, res) => {
       return res.status(403).json({ error: "司機帳號已停用" });
     }
 
-    const updated = await updateOrder(order.id, {
-      status: "accepted",
-      assigned_driver_id: driver.id,
-      driver_name: driver.name,
-      driver_phone: driver.phone,
-      driver_plate: driver.plate,
-      final_fare: order.estimated_fare,
-      accepted_at: new Date().toISOString()
-    });
+    const nearby = await filterNearbyPickupOrders(driver, [order], { bypassCache: true });
+    if (!nearby.length) {
+      return res.status(409).json({
+        error: "此訂單距離目前位置超過 20 分鐘，或 GPS 定位已失效，無法接單"
+      });
+    }
+
+    const updated = await claimOrder(order.id, driver.id, order.estimated_fare);
 
     await createAuditLog({ actor_type: "driver", actor_id: String(driver.id), action: "order.claim", entity_type: "order", entity_id: String(order.id), details: {} });
 
-    await updateDriver(driver.id, { status: "busy" });
     await notifyCustomer(updated, "accept");
 
     res.json(updated);
   } catch (error) {
+    if (sendClaimError(res, error)) return;
     res.status(500).json({ error: error.message });
   }
 });
@@ -771,6 +812,71 @@ app.post("/api/driver/status", driverJwtAuth, async (req, res) => {
   }
 });
 
+async function filterNearbyPickupOrders(driver, orders, { bypassCache = false } = {}) {
+  const latitude = Number(driver.current_latitude);
+  const longitude = Number(driver.current_longitude);
+  const locatedAt = Date.parse(driver.last_location_at || "");
+  const locationIsFresh = Number.isFinite(latitude) && Number.isFinite(longitude) &&
+    Number.isFinite(locatedAt) && Date.now() - locatedAt <= LOCATION_MAX_AGE_MS;
+
+  if (!locationIsFresh) return [];
+
+  const results = await Promise.all(orders.slice(0, 100).map(async order => {
+    const pickupLatitude = Number(order.pickup_latitude);
+    const pickupLongitude = Number(order.pickup_longitude);
+
+    // Orders created before GPS coordinates were stored are not sent to
+    // drivers automatically. This avoids an extra Geocoding API request.
+    if (!Number.isFinite(pickupLatitude) || !Number.isFinite(pickupLongitude)) {
+      return null;
+    }
+
+    // About 1.1 km buckets prevent a moving phone from creating a fresh API
+    // request every few metres.
+    const roundedLat = latitude.toFixed(2);
+    const roundedLng = longitude.toFixed(2);
+    const cacheKey = `${order.id}:${roundedLat}:${roundedLng}`;
+    const cached = pickupEtaCache.get(cacheKey);
+    let eta;
+
+    if (!bypassCache && cached && Date.now() - cached.createdAt < ETA_CACHE_MS) {
+      eta = cached.value;
+    } else {
+      try {
+        const pickup = {
+          latitude: pickupLatitude,
+          longitude: pickupLongitude
+        };
+        eta = await getPickupEtaMinutes(
+          latitude,
+          longitude,
+          pickup,
+          process.env.GOOGLE_MAPS_API_KEY
+        );
+        pickupEtaCache.set(cacheKey, { value: eta, createdAt: Date.now() });
+      } catch (error) {
+        console.error(`Pickup ETA failed for order ${order.id}:`, error.message);
+        return null;
+      }
+    }
+
+    if (eta.durationMin > PICKUP_ETA_LIMIT_MINUTES) return null;
+    return {
+      ...order,
+      pickup_eta_minutes: Math.ceil(eta.durationMin),
+      pickup_distance_km: Number(eta.distanceKm.toFixed(1))
+    };
+  }));
+
+  // Prevent an unbounded in-memory cache on long-running Railway instances.
+  if (pickupEtaCache.size > 2000) {
+    for (const [key, item] of pickupEtaCache) {
+      if (Date.now() - item.createdAt > ETA_CACHE_MS) pickupEtaCache.delete(key);
+    }
+  }
+  return results.filter(Boolean);
+}
+
 async function notifyCustomer(order, action) {
   if (!order.customer_line_id) return;
 
@@ -816,6 +922,27 @@ function normalizeLineText(value) {
     .replace(/\\+n/g, "\n");
 }
 
+function sendClaimError(res, error) {
+  const message = String(error?.message || "");
+  if (message.includes("DRIVER_HAS_ACTIVE_ORDER")) {
+    res.status(409).json({ error: "同一時間只能進行一張一般訂單；請先完成目前訂單" });
+    return true;
+  }
+  if (message.includes("DRIVER_HAS_IMMINENT_RESERVATION")) {
+    res.status(409).json({ error: "已有預約單即將開始，上車時間前 30 分鐘禁止再接單" });
+    return true;
+  }
+  if (message.includes("ORDER_NOT_PENDING")) {
+    res.status(409).json({ error: "訂單已被其他司機接走" });
+    return true;
+  }
+  if (message.includes("DRIVER_NOT_AVAILABLE")) {
+    res.status(409).json({ error: "司機目前無法接單" });
+    return true;
+  }
+  return false;
+}
+
 function adminAuth(req, res, next) {
   if (req.get("x-admin-token") !== process.env.ADMIN_TOKEN) {
     return res.status(401).json({ error: "未授權" });
@@ -840,5 +967,5 @@ function driverJwtAuth(req, res, next) {
 }
 
 app.listen(port, "0.0.0.0", () => {
-  console.log(`OTZ V5.2 listening on ${port}`);
+  console.log(`OTZ V5.2.1 listening on ${port}`);
 });
