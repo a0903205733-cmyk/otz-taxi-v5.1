@@ -55,6 +55,10 @@ export async function getRoute(origin, destination, apiKey, fareSettings = {}) {
   };
 }
 
+export async function validatePickupLocation(pickup, apiKey) {
+  return geocodeTaiwanAddress(pickup, apiKey, "上車地點");
+}
+
 export async function getPickupEtaMinutes(latitude, longitude, pickup, apiKey) {
   const lat = Number(latitude);
   const lng = Number(longitude);
@@ -108,6 +112,12 @@ async function geocodeTaiwanAddress(value, apiKey, label) {
   const originalAddress = String(value || "").trim();
   validateKnownLandmarkConflict(originalAddress, label);
   const address = normalizeTaiwanPlace(originalAddress);
+  const expectedCity = inferExpectedCity(originalAddress, address);
+  if (!expectedCity) {
+    const error = new Error(`${label}請明確標示縣市；高雄、屏東地區可省略縣市名稱。`);
+    error.code = "LOCATION_CITY_REQUIRED";
+    throw error;
+  }
   if (!address) throw new Error(`${label}不能空白`);
 
   const params = new URLSearchParams({
@@ -146,12 +156,14 @@ async function geocodeTaiwanAddress(value, apiKey, label) {
 
   validateAdministrativeHint(originalAddress, addressText, label);
 
-  const trustedNormalizedPlace = address !== originalAddress || isAdministrativeAreaQuery(originalAddress);
-  if (result.partial_match && !trustedNormalizedPlace) {
-    const error = new Error(`${label}只能部分符合，請輸入更完整的縣市、區域、地址或地標全名`);
-    error.code = "LOCATION_AMBIGUOUS";
+  if (!normalizeCityText(addressText).includes(normalizeCityText(expectedCity))) {
+    const error = new Error(`${label}的地圖結果不在${expectedCity}，請補充更完整的行政區、路名或地標。`);
+    error.code = "LOCATION_CONFLICT";
     throw error;
   }
+
+  // Google 對真實門牌也可能回傳 partial_match。縣市吻合且位於
+  // 台灣本島時即可接受，避免因省略村、里、鄰而誤擋。
 
   if (country?.short_name !== "TW" || !inMainIslandBounds || isExcludedIsland) {
     const error = new Error(`${label}不在台灣本島服務範圍內`);
@@ -166,6 +178,36 @@ async function geocodeTaiwanAddress(value, apiKey, label) {
       longitude: Number(location.lng)
     }
   };
+}
+
+function inferExpectedCity(original, normalized) {
+  const source = normalizeCityText(original);
+  const resolvedQuery = normalizeCityText(normalized);
+  const cities = [
+    "基隆市", "台北市", "新北市", "桃園市", "新竹市", "新竹縣",
+    "苗栗縣", "台中市", "彰化縣", "南投縣", "雲林縣", "嘉義市",
+    "嘉義縣", "台南市", "高雄市", "屏東縣", "宜蘭縣", "花蓮縣", "台東縣"
+  ];
+  const explicit = cities.find(city => source.includes(normalizeCityText(city)));
+  if (explicit) return explicit;
+
+  if (["屏東", "東港", "林邊", "潮州", "佳冬", "枋寮"].some(token => source.includes(token))) {
+    return "屏東縣";
+  }
+  if ([
+    "高雄", "左營", "三民", "小港", "鳳山", "苓雅", "前鎮", "楠梓",
+    "鼓山", "鹽埕", "旗津", "岡山", "高醫", "夢時代", "高雄長庚", "高雄榮總"
+  ].some(token => source.includes(token))) {
+    return "高雄市";
+  }
+
+  if (resolvedQuery.includes("屏東縣")) return "屏東縣";
+  if (resolvedQuery.includes("高雄市")) return "高雄市";
+  return null;
+}
+
+function normalizeCityText(value) {
+  return String(value || "").replace(/臺/g, "台").replace(/\s+/g, "");
 }
 
 function normalizeTaiwanPlace(value) {
@@ -198,6 +240,10 @@ function normalizeTaiwanPlace(value) {
     {
       matches: ["高醫", "高雄醫學院", "高雄醫學大學附設醫院", "高醫附院"],
       address: "高雄醫學大學附設中和紀念醫院, 高雄市三民區自由一路100號"
+    },
+    {
+      matches: ["高雄長庚", "高雄長庚醫院", "高雄長庚紀念醫院", "長庚醫院"],
+      address: "高雄長庚紀念醫院, 高雄市鳥松區大埤路123號"
     },
     {
       matches: ["左營高鐵", "高鐵左營站", "左營高鐵站"],

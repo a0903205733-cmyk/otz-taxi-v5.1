@@ -1,5 +1,42 @@
 export const orderNo = id => `OTZ-${String(id).padStart(6, "0")}`;
 
+export function pickupOnlyFlex(order) {
+  const row = (label, value) => ({
+    type: "box",
+    layout: "horizontal",
+    contents: [
+      { type: "text", text: label, size: "sm", color: "#777777", flex: 2 },
+      { type: "text", text: String(value), size: "sm", wrap: true, flex: 5 }
+    ]
+  });
+  return {
+    type: "flex",
+    altText: `${orderNo(order.id)} 已建立，目的地與車資待確認`,
+    contents: {
+      type: "bubble",
+      header: {
+        type: "box", layout: "vertical",
+        contents: [
+          { type: "text", text: "🚕 OTZ 車隊", weight: "bold", size: "xl" },
+          { type: "text", text: "叫車需求已送出", size: "sm", color: "#777777" }
+        ]
+      },
+      body: {
+        type: "box", layout: "vertical", spacing: "md",
+        contents: [
+          row("訂單", orderNo(order.id)),
+          row("上車", order.pickup),
+          row("下車", "尚未提供"),
+          row("時間", order.ride_time || "立即叫車"),
+          row("人數", order.passengers ? `${order.passengers} 位` : "尚未提供"),
+          { type: "separator" },
+          { type: "text", text: "距離、車程與車資待司機確認", weight: "bold", wrap: true, align: "center" }
+        ]
+      }
+    }
+  };
+}
+
 export function quoteFlex(order) {
   const row = (label, value) => ({
     type: "box",

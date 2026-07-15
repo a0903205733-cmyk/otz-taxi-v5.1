@@ -4,9 +4,9 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { middleware, messagingApi } from "@line/bot-sdk";
 import { parseRideRequest, classifyRideSchedule, isGroupRideRequest } from "./parser.js";
-import { getRoute, getPickupEtaMinutes } from "./maps.js";
+import { getRoute, getPickupEtaMinutes, validatePickupLocation } from "./maps.js";
 import { calculateFare } from "./fare.js";
-import { quoteFlex, orderNo } from "./messages.js";
+import { quoteFlex, pickupOnlyFlex, orderNo } from "./messages.js";
 import {
   createOrder, listOrders, getOrder, updateOrder, claimOrder,
   listDrivers, createDriver, updateDriver,
@@ -38,11 +38,11 @@ subscribeToFleetChanges(event => {
   for (const client of realtimeClients) client.write(message);
 });
 
-app.get("/", (_req, res) => res.send("OTZ V5.3.0 is running"));
+app.get("/", (_req, res) => res.send("OTZ V5.3.2 is running"));
 app.get("/health", async (_req, res) => {
   const checks = {
     app: "ok",
-    version: "5.3.0",
+    version: "5.3.2",
     line: Boolean(process.env.LINE_CHANNEL_SECRET && process.env.LINE_CHANNEL_ACCESS_TOKEN),
     google_maps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
     supabase: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY),
@@ -120,7 +120,7 @@ async function handleText(event) {
     return reply(event.replyToken, "此帳號目前無法使用自動叫車，請聯絡 OTZ 車隊客服。");
   }
 
-  if (!parsed.pickup || !parsed.destination) {
+  if (!parsed.pickup) {
     return reply(
       event.replyToken,
       settings.line_welcome_message ||
@@ -130,6 +130,38 @@ async function handleText(event) {
 
   try {
     const schedule = classifyRideSchedule(parsed.rideTime);
+    if (!parsed.destination) {
+      // 沒有目的地時只驗證上車點，不呼叫 Routes API 或試算車資。
+      const pickupResult = await validatePickupLocation(
+        parsed.pickup,
+        process.env.GOOGLE_MAPS_API_KEY
+      );
+      const order = await createOrder({
+        customer_line_id: event.source?.userId || null,
+        pickup: parsed.pickup,
+        destination: "尚未提供",
+        ride_time: parsed.rideTime || null,
+        is_reservation: schedule.isReservation,
+        scheduled_at: schedule.scheduledAt,
+        passengers: parsed.passengers,
+        pickup_latitude: pickupResult.location?.latitude ?? null,
+        pickup_longitude: pickupResult.location?.longitude ?? null,
+        distance_km: 0,
+        duration_min: 0,
+        base_fare: 0,
+        mileage_fare: 0,
+        time_fare: 0,
+        toll: 0,
+        night_surcharge: 0,
+        estimated_fare: 0,
+        in_service_area: true,
+        status: "pending"
+      });
+      return line.replyMessage({
+        replyToken: event.replyToken,
+        messages: [pickupOnlyFlex(order)]
+      });
+    }
     const route = await getRoute(
       parsed.pickup,
       parsed.destination,
@@ -175,7 +207,7 @@ async function handleText(event) {
     if (["INVALID_RIDE_TIME", "RIDE_TIME_EXPIRED"].includes(error.code)) {
       return reply(event.replyToken, `⚠️ ${error.message}`);
     }
-    if (["LOCATION_OUTSIDE_TAIWAN", "LOCATION_AMBIGUOUS", "LOCATION_CONFLICT"].includes(error.code)) {
+    if (["LOCATION_OUTSIDE_TAIWAN", "LOCATION_AMBIGUOUS", "LOCATION_CONFLICT", "LOCATION_CITY_REQUIRED"].includes(error.code)) {
       return reply(event.replyToken, `⚠️ ${error.message}\nOTZ 車隊目前只接受台灣本島的上下車地點，不接受外島或國外行程。`);
     }
     return reply(event.replyToken, "目前無法完成估價，請稍後再試。");
@@ -919,7 +951,9 @@ async function notifyCustomer(order, action) {
       `司機：${order.driver_name || "OTZ車隊"}\n` +
       `${order.driver_phone ? `電話：${order.driver_phone}\n` : ""}` +
       `${order.driver_plate ? `車牌：${order.driver_plate}\n` : ""}` +
-      `確認車資：${order.final_fare || order.estimated_fare} 元`;
+      `${order.destination === "尚未提供"
+        ? "車資：待確認"
+        : `確認車資：${order.final_fare || order.estimated_fare} 元`}`;
   } else if (action === "start") {
     text =
       `🚖 行程已開始\n訂單：${orderNo(order.id)}\n` +
@@ -998,5 +1032,5 @@ function driverJwtAuth(req, res, next) {
 }
 
 app.listen(port, "0.0.0.0", () => {
-  console.log(`OTZ V5.3.0 listening on ${port}`);
+  console.log(`OTZ V5.3.2 listening on ${port}`);
 });

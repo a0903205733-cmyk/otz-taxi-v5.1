@@ -103,7 +103,7 @@ function card(o){
     <div class="meta">
       預約：${esc(o.ride_time||"未提供")}<br>
       人數：${o.passengers||"未提供"} 位<br>
-      車資：${o.final_fare||o.estimated_fare||0} 元
+      車資：${o.destination==="尚未提供"?"待確認":`${o.final_fare||o.estimated_fare||0} 元`}
     </div>
     ${o.status==="pending"&&o.pickup_eta_minutes!=null?`<div class="meta">距上車點：約 ${o.pickup_eta_minutes} 分鐘／${o.pickup_distance_km} 公里（Google 最佳駕車路線）</div>`:""}
     <div class="actions">
@@ -111,7 +111,7 @@ function card(o){
       ${mine&&o.status==="accepted"&&!o.started_at?`<button class="blue" onclick="action(${o.id},'start')">開始行程</button>`:""}
       ${mine&&o.status==="accepted"?`<button class="green" onclick="action(${o.id},'complete')">完成訂單</button>`:""}
       <button class="gray" onclick="nav('${encodeURIComponent(o.pickup)}')">導航上車</button>
-      <button class="gray" onclick="nav('${encodeURIComponent(o.destination)}')">導航目的地</button>
+      ${o.destination!=="尚未提供"?`<button class="gray" onclick="nav('${encodeURIComponent(o.destination)}')">導航目的地</button>`:""}
     </div>
   </section>`;
 }
