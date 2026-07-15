@@ -10,7 +10,12 @@ import { quoteFlex, orderNo } from "./messages.js";
 import {
   createOrder, listOrders, getOrder, updateOrder,
   listDrivers, createDriver, updateDriver,
-  getDriverByUsername, getDriverById
+  getDriverByUsername, getDriverById,
+  listVehicles, getVehicleById, createVehicle, updateVehicle,
+  subscribeToFleetChanges, listSettings, updateSetting,
+  listCustomers, updateCustomer, upsertCustomerByLineId,
+  createPayment, createReceipt, getReceiptByOrderId,
+  listAuditLogs, createAuditLog
 } from "./db.js";
 
 dotenv.config();
@@ -22,15 +27,23 @@ const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN
 });
 
-app.get("/", (_req, res) => res.send("OTZ V5.0 is running"));
+const realtimeClients = new Set();
+
+subscribeToFleetChanges(event => {
+  const message = `data: ${JSON.stringify(event)}\n\n`;
+  for (const client of realtimeClients) client.write(message);
+});
+
+app.get("/", (_req, res) => res.send("OTZ V5.2 is running"));
 app.get("/health", async (_req, res) => {
   const checks = {
     app: "ok",
-    version: "5.0.0",
+    version: "5.2.0",
     line: Boolean(process.env.LINE_CHANNEL_SECRET && process.env.LINE_CHANNEL_ACCESS_TOKEN),
     google_maps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
     supabase: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY),
-    jwt: Boolean(process.env.JWT_SECRET)
+    jwt: Boolean(process.env.JWT_SECRET),
+    realtime: true
   };
 
   const healthy = Object.entries(checks)
@@ -64,18 +77,24 @@ async function handleLineEvent(event) {
 
 async function handleText(event) {
   const incomingText = String(event.message.text || "").trim();
+  const settings = await listSettings();
 
   // 這些文字通常來自 LINE 圖文選單或其他官方帳號功能。
   // 命中時不由自訂 Bot 回覆，避免和 LINE 內建回應重複。
-  const ignoredKeywords = new Set([
-    "常見問題",
-    "試算車資",
-    "應徵司機"
-  ]);
+  const ignoredKeywords = new Set(
+    Array.isArray(settings.ignored_keywords)
+      ? settings.ignored_keywords
+      : ["常見問題", "試算車資", "應徵司機"]
+  );
 
   if (ignoredKeywords.has(incomingText)) {
     console.log(`Ignored LINE keyword: ${incomingText}`);
     return;
+  }
+
+  const customer = await upsertCustomerByLineId(event.source?.userId || null);
+  if (customer?.customer_type === "blacklist") {
+    return reply(event.replyToken, "此帳號目前無法使用自動叫車，請聯絡 OTZ 車隊客服。");
   }
 
   const parsed = parseRideRequest(incomingText);
@@ -83,7 +102,8 @@ async function handleText(event) {
   if (!parsed.pickup || !parsed.destination) {
     return reply(
       event.replyToken,
-      "請輸入：上車地點到下車地點、時間、人數\n例如：明天早上8點，東港碼頭到左營高鐵，2位"
+      settings.line_welcome_message ||
+        "請輸入：上車地點到下車地點、時間、人數\n例如：明天早上8點，東港碼頭到左營高鐵，2位"
     );
   }
 
@@ -94,8 +114,8 @@ async function handleText(event) {
       process.env.GOOGLE_MAPS_API_KEY
     );
 
-    const toll = Number(process.env.DEFAULT_TOLL || 0);
-    const fare = calculateFare(route.distanceKm, route.durationMin, toll);
+    const toll = Number(settings.default_toll ?? process.env.DEFAULT_TOLL ?? 0);
+    const fare = calculateFare(route.distanceKm, route.durationMin, toll, settings);
     const areas = String(process.env.SERVICE_AREAS || "東港,潮州,林邊,佳冬,枋寮").split(",");
     const inServiceArea = areas.some(area =>
       `${parsed.pickup} ${parsed.destination}`.includes(area.trim())
@@ -125,6 +145,9 @@ async function handleText(event) {
     });
   } catch (error) {
     console.error("Quote error:", error);
+    if (["LOCATION_OUTSIDE_TAIWAN", "LOCATION_AMBIGUOUS"].includes(error.code)) {
+      return reply(event.replyToken, `⚠️ ${error.message}\nOTZ 車隊目前只接受台灣本島的上下車地點，不接受外島或國外行程。`);
+    }
     return reply(event.replyToken, "目前無法完成估價，請稍後再試。");
   }
 }
@@ -159,6 +182,41 @@ async function handlePostback(event) {
 }
 
 app.use(express.json());
+
+app.get("/api/events", (req, res) => {
+  const adminToken = String(req.query.adminToken || "");
+  const driverToken = String(req.query.driverToken || "");
+  const isAdmin = adminToken && adminToken === process.env.ADMIN_TOKEN;
+  let isDriver = false;
+
+  if (driverToken) {
+    try {
+      jwt.verify(driverToken, process.env.JWT_SECRET);
+      isDriver = true;
+    } catch {
+      isDriver = false;
+    }
+  }
+
+  if (!isAdmin && !isDriver) {
+    return res.status(401).json({ error: "未授權" });
+  }
+
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive"
+  });
+  res.flushHeaders();
+  res.write(`data: ${JSON.stringify({ table: "connected", eventType: "READY" })}\n\n`);
+  realtimeClients.add(res);
+
+  const heartbeat = setInterval(() => res.write(": keepalive\n\n"), 25000);
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    realtimeClients.delete(res);
+  });
+});
 
 app.post("/api/driver/login", async (req, res) => {
   try {
@@ -204,6 +262,8 @@ app.post("/api/driver/login", async (req, res) => {
         phone: driver.phone,
         plate: driver.plate,
         vehicle: driver.vehicle,
+        vehicle_id: driver.vehicle_id,
+        member_role: driver.member_role,
         status: driver.status
       }
     });
@@ -228,6 +288,51 @@ app.get("/api/admin/drivers", adminAuth, async (_req, res) => {
   }
 });
 
+app.get("/api/admin/vehicles", adminAuth, async (_req, res) => {
+  try {
+    res.json(await listVehicles());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/vehicles", adminAuth, async (req, res) => {
+  try {
+    const plate = String(req.body.plate || "").trim().toUpperCase();
+    const model = String(req.body.model || "").trim();
+    const seats = Number(req.body.seats || 4);
+
+    if (!plate || !model || !Number.isInteger(seats) || seats < 1 || seats > 20) {
+      return res.status(400).json({ error: "車牌、車型必填，座位數需為 1～20" });
+    }
+
+    const vehicle = await createVehicle({
+      plate,
+      brand: String(req.body.brand || "").trim() || null,
+      model,
+      color: String(req.body.color || "").trim() || null,
+      seats,
+      is_active: true
+    });
+
+    await createAuditLog({ actor_type: "admin", action: "vehicle.create", entity_type: "vehicle", entity_id: String(vehicle.id), details: { plate, model } });
+
+    res.status(201).json(vehicle);
+  } catch (error) {
+    const status = String(error.code) === "23505" ? 409 : 500;
+    res.status(status).json({ error: status === 409 ? "車牌已存在" : error.message });
+  }
+});
+
+app.post("/api/admin/vehicles/:id/toggle", adminAuth, async (req, res) => {
+  try {
+    const vehicle = await getVehicleById(Number(req.params.id));
+    res.json(await updateVehicle(vehicle.id, { is_active: !vehicle.is_active }));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post("/api/admin/drivers", adminAuth, async (req, res) => {
   try {
     const username = String(req.body.username || "").trim();
@@ -247,16 +352,31 @@ app.post("/api/admin/drivers", adminAuth, async (req, res) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
+    const allowedRoles = ["driver", "dispatcher", "manager"];
+    const memberRole = allowedRoles.includes(req.body.memberRole)
+      ? req.body.memberRole
+      : "driver";
+    const vehicleId = req.body.vehicleId ? Number(req.body.vehicleId) : null;
+    const assignedVehicle = vehicleId ? await getVehicleById(vehicleId) : null;
+
+    if (assignedVehicle && !assignedVehicle.is_active) {
+      return res.status(409).json({ error: "無法指派已停用的車輛" });
+    }
+
     const driver = await createDriver({
       name: req.body.name,
       username,
       password_hash: passwordHash,
       phone: req.body.phone || null,
-      plate: req.body.plate || null,
-      vehicle: req.body.vehicle || null,
+      plate: assignedVehicle?.plate || null,
+      vehicle: assignedVehicle?.model || null,
+      vehicle_id: assignedVehicle?.id || null,
+      member_role: memberRole,
       status: "available",
       is_active: true
     });
+
+    await createAuditLog({ actor_type: "admin", action: "member.create", entity_type: "driver", entity_id: String(driver.id), details: { username, member_role: memberRole } });
 
     res.json({
       id: driver.id,
@@ -265,9 +385,33 @@ app.post("/api/admin/drivers", adminAuth, async (req, res) => {
       phone: driver.phone,
       plate: driver.plate,
       vehicle: driver.vehicle,
+      vehicle_id: driver.vehicle_id,
+      member_role: driver.member_role,
       status: driver.status,
       is_active: driver.is_active
     });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/drivers/:id/vehicle", adminAuth, async (req, res) => {
+  try {
+    const driver = await getDriverById(Number(req.params.id));
+    const vehicleId = req.body.vehicleId ? Number(req.body.vehicleId) : null;
+    const vehicle = vehicleId ? await getVehicleById(vehicleId) : null;
+
+    if (vehicle && !vehicle.is_active) {
+      return res.status(409).json({ error: "無法指派已停用的車輛" });
+    }
+
+    const updated = await updateDriver(driver.id, {
+      vehicle_id: vehicle?.id || null,
+      plate: vehicle?.plate || null,
+      vehicle: vehicle?.model || null
+    });
+
+    res.json(updated);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -312,6 +456,8 @@ app.post("/api/admin/orders/:id/assign", adminAuth, async (req, res) => {
       accepted_at: new Date().toISOString()
     });
 
+    await createAuditLog({ actor_type: "admin", action: "order.assign", entity_type: "order", entity_id: String(order.id), details: { driver_id: driver.id, final_fare: updated.final_fare } });
+
     await updateDriver(driver.id, { status: "busy" });
     await notifyCustomer(updated, "accept");
 
@@ -343,12 +489,154 @@ app.post("/api/admin/orders/:id/action", adminAuth, async (req, res) => {
 
     const updated = await updateOrder(order.id, values);
 
+    await createAuditLog({ actor_type: "admin", action: `order.${action}`, entity_type: "order", entity_id: String(order.id), details: values });
+
     if (order.assigned_driver_id) {
       await updateDriver(order.assigned_driver_id, { status: "available" });
     }
 
     await notifyCustomer(updated, action);
     res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put("/api/admin/orders/:id/fare", adminAuth, async (req, res) => {
+  try {
+    const amount = Number(req.body.finalFare);
+    if (!Number.isFinite(amount) || amount < 0) {
+      return res.status(400).json({ error: "車資格式不正確" });
+    }
+    const updated = await updateOrder(Number(req.params.id), { final_fare: Math.round(amount) });
+    await createAuditLog({ actor_type: "admin", action: "order.fare.update", entity_type: "order", entity_id: String(updated.id), details: { final_fare: updated.final_fare } });
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/settings", adminAuth, async (_req, res) => {
+  try {
+    res.json(await listSettings());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put("/api/admin/settings", adminAuth, async (req, res) => {
+  try {
+    const allowed = new Set([
+      "fleet_name", "base_fare", "per_km", "per_minute", "default_toll",
+      "night_surcharge", "line_welcome_message", "ignored_keywords", "receipt_prefix"
+    ]);
+    const entries = Object.entries(req.body || {}).filter(([key]) => allowed.has(key));
+
+    if (!entries.length) return res.status(400).json({ error: "沒有可更新的設定" });
+
+    for (const [key, value] of entries) await updateSetting(key, value);
+    await createAuditLog({
+      actor_type: "admin", action: "settings.update", entity_type: "settings",
+      details: Object.fromEntries(entries)
+    });
+    res.json(await listSettings());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/customers", adminAuth, async (_req, res) => {
+  try {
+    res.json(await listCustomers());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put("/api/admin/customers/:id", adminAuth, async (req, res) => {
+  try {
+    const allowedTypes = ["regular", "vip", "blacklist"];
+    if (!allowedTypes.includes(req.body.customer_type)) {
+      return res.status(400).json({ error: "客戶類型不正確" });
+    }
+    const customer = await updateCustomer(Number(req.params.id), {
+      name: String(req.body.name || "").trim() || null,
+      phone: String(req.body.phone || "").trim() || null,
+      customer_type: req.body.customer_type,
+      notes: String(req.body.notes || "").trim() || null
+    });
+    await createAuditLog({ actor_type: "admin", action: "customer.update", entity_type: "customer", entity_id: String(customer.id), details: req.body });
+    res.json(customer);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/orders/:id/payment", adminAuth, async (req, res) => {
+  try {
+    const order = await getOrder(Number(req.params.id));
+    const method = String(req.body.method || "");
+    if (!["cash", "line_pay"].includes(method)) {
+      return res.status(400).json({ error: "付款方式不正確" });
+    }
+    const amount = Number(req.body.amount || order.final_fare || order.estimated_fare || 0);
+    const payment = await createPayment({ order_id: order.id, method, amount, status: "paid", transaction_ref: req.body.transactionRef || null, recorded_by: "admin" });
+    await updateOrder(order.id, { payment_method: method, payment_status: "paid", paid_at: new Date().toISOString() });
+    const settings = await listSettings();
+    const receipt = await createReceipt({
+      order_id: order.id,
+      receipt_no: `${settings.receipt_prefix || "OTZR"}-${String(order.id).padStart(8, "0")}`,
+      amount,
+      payment_method: method
+    });
+    await createAuditLog({ actor_type: "admin", action: "payment.record", entity_type: "order", entity_id: String(order.id), details: { method, amount } });
+    res.json({ payment, receipt });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/orders/:id/receipt", adminAuth, async (req, res) => {
+  try {
+    const receipt = await getReceiptByOrderId(Number(req.params.id));
+    if (!receipt) return res.status(404).json({ error: "尚未開立收據" });
+    res.json(receipt);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/admin/orders/:id/rebook", adminAuth, async (req, res) => {
+  try {
+    const source = await getOrder(Number(req.params.id));
+    const duplicate = await createOrder({
+      customer_line_id: source.customer_line_id,
+      customer_phone: source.customer_phone,
+      pickup: source.pickup,
+      destination: source.destination,
+      ride_time: req.body.rideTime || null,
+      passengers: source.passengers,
+      distance_km: source.distance_km,
+      duration_min: source.duration_min,
+      base_fare: source.base_fare,
+      mileage_fare: source.mileage_fare,
+      time_fare: source.time_fare,
+      toll: source.toll,
+      night_surcharge: source.night_surcharge,
+      estimated_fare: source.estimated_fare,
+      in_service_area: source.in_service_area,
+      status: "pending"
+    });
+    await createAuditLog({ actor_type: "admin", action: "order.rebook", entity_type: "order", entity_id: String(duplicate.id), details: { source_order_id: source.id } });
+    res.status(201).json(duplicate);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/api/admin/audit-logs", adminAuth, async (_req, res) => {
+  try {
+    res.json(await listAuditLogs());
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -365,6 +653,8 @@ app.get("/api/driver/me", driverJwtAuth, async (req, res) => {
       phone: driver.phone,
       plate: driver.plate,
       vehicle: driver.vehicle,
+      vehicle_id: driver.vehicle_id,
+      member_role: driver.member_role,
       status: driver.status,
       is_active: driver.is_active
     });
@@ -413,6 +703,8 @@ app.post("/api/driver/orders/:id/claim", driverJwtAuth, async (req, res) => {
       accepted_at: new Date().toISOString()
     });
 
+    await createAuditLog({ actor_type: "driver", actor_id: String(driver.id), action: "order.claim", entity_type: "order", entity_id: String(order.id), details: {} });
+
     await updateDriver(driver.id, { status: "busy" });
     await notifyCustomer(updated, "accept");
 
@@ -449,6 +741,8 @@ app.post("/api/driver/orders/:id/action", driverJwtAuth, async (req, res) => {
     }
 
     const updated = await updateOrder(order.id, values);
+
+    await createAuditLog({ actor_type: "driver", actor_id: String(req.driver.driverId), action: `order.${action}`, entity_type: "order", entity_id: String(order.id), details: values });
 
     if (action === "complete") {
       await updateDriver(req.driver.driverId, { status: "available" });
@@ -546,5 +840,5 @@ function driverJwtAuth(req, res, next) {
 }
 
 app.listen(port, "0.0.0.0", () => {
-  console.log(`OTZ V4.2 listening on ${port}`);
+  console.log(`OTZ V5.2 listening on ${port}`);
 });

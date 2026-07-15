@@ -1,4 +1,4 @@
-# OTZ 車隊 V5.0 核心正式版
+# OTZ 車隊 V5.2 車隊管理版
 
 這是 V5 的第一個乾淨核心版本。
 
@@ -15,12 +15,22 @@
 - 忽略「常見問題」「試算車資」「應徵司機」
 - `/health` 健康檢查
 - `settings` 系統設定資料表
+- Supabase Realtime 即時訂單與司機狀態同步
+- 新訂單提示音與瀏覽器通知
+- 多位車隊成員、獨立帳號與角色
+- 車輛、車牌、廠牌、車型、顏色與座位管理
+- 後台直接調整計價、LINE 歡迎訊息與忽略關鍵字
+- 客戶電話、VIP／黑名單與備註
+- 現金／LINE Pay 付款紀錄與電子收據資料
+- 一鍵再次叫車與操作紀錄
+- 手機版管理後台
 
 ## 部署
 
 1. Supabase SQL Editor 執行：
    - `database/upgrade_v4_2.sql`
    - `database/upgrade_v5_0.sql`
+   - `database/upgrade_v5_2.sql`
 
 2. Railway 確認環境變數：
    - LINE_CHANNEL_SECRET

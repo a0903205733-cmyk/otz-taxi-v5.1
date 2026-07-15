@@ -42,6 +42,7 @@ button.green{background:var(--green)}button.blue{background:var(--blue);color:#f
 <script>
 let authToken=localStorage.getItem("otzDriverJwt")||"";
 let me=null;
+let eventSource=null,previousPending=new Set();
 
 async function api(url,opt={}){
   opt.headers={...(opt.headers||{})};
@@ -77,6 +78,7 @@ async function init(){
     driverInfo.textContent=`${me.phone||""}｜${me.plate||""}`;
     status.value=me.status;
     await refresh();
+    connectRealtime();
   }catch(e){
     logout();
   }
@@ -85,6 +87,7 @@ async function init(){
 async function refresh(){
   try{
     const orders=await api("/api/driver/orders");
+    notifyNewOrders(orders);
     list.innerHTML=orders.length?orders.map(card).join(""):"<div class='card'>目前沒有訂單</div>";
   }catch(e){list.innerHTML=`<div class='card'>${e.message}</div>`}
 }
@@ -146,6 +149,30 @@ function logout(){
   loginCard.style.display="block";
   profileCard.style.display="none";
   list.innerHTML="";
+  if(eventSource){eventSource.close();eventSource=null}
+}
+
+function connectRealtime(){
+  if(eventSource||!authToken)return;
+  eventSource=new EventSource(`/api/events?driverToken=${encodeURIComponent(authToken)}`);
+  eventSource.onmessage=()=>refresh();
+  eventSource.onerror=()=>{eventSource.close();eventSource=null;setTimeout(connectRealtime,3000)};
+}
+
+function notifyNewOrders(orders){
+  const pending=new Set(orders.filter(o=>o.status==="pending").map(o=>o.id));
+  const added=[...pending].filter(id=>!previousPending.has(id));
+  if(previousPending.size&&added.length){
+    beep();
+    if(Notification.permission==="granted")new Notification("OTZ 新訂單",{body:`新增 ${added.length} 筆待接訂單`});
+  }
+  previousPending=pending;
+  if(Notification.permission==="default")Notification.requestPermission();
+}
+
+function beep(){
+  const c=new(window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();
+  o.connect(g);g.connect(c.destination);o.frequency.value=880;g.gain.value=.12;o.start();o.stop(c.currentTime+.25);
 }
 
 function nav(place){
