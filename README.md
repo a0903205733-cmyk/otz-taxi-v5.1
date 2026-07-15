@@ -1,4 +1,4 @@
-# OTZ 車隊 V5.2.1 正式版
+# OTZ 車隊 V5.2.2 正式版
 
 這是目前唯一應部署的 OTZ 車隊正式版本，整合 LINE 叫車、Google Maps 路線與估價、Supabase、管理後台及司機端。
 
@@ -43,7 +43,7 @@
 3. 將本專案完整上傳到 GitHub 根目錄，等待 Railway 自動部署。
 
 4. 驗證：
-   - `/health` 應顯示 `version: 5.2.1` 且各服務為 `true`。
+   - `/health` 應顯示 `version: 5.2.2` 且各服務為 `true`。
    - `/admin/` 管理後台。
    - `/driver/` 司機端；必須允許精確位置及瀏覽器通知。
 

@@ -1,4 +1,7 @@
-# OTZ V5.2.1 Release Notes
+# OTZ V5.2.2 Release Notes
+
+- 派單改用全新 `claim_order_v2` JSON RPC，徹底避開 PostgREST 單一物件 coercion 與舊 schema cache 衝突。
+- 訂單與司機查詢改為安全的 maybe-single 處理，找不到資料時回傳明確錯誤。
 
 - 修正後台指定司機時 PostgREST 單一 JSON coercion 錯誤。
 - 修正 LINE 訊息顯示 `\\n` 的問題。

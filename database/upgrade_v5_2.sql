@@ -108,6 +108,72 @@ begin
 end;
 $$;
 
+-- Stable JSON-returning RPC used by V5.2.2+. A new function name avoids
+-- collisions with cached/older claim_order return signatures in PostgREST.
+create or replace function public.claim_order_v2(
+  p_order_id bigint,
+  p_driver_id bigint,
+  p_final_fare integer default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_order public.orders;
+  target_driver public.drivers;
+  updated_order public.orders;
+begin
+  perform pg_advisory_xact_lock(p_driver_id);
+
+  select * into target_order from public.orders where id = p_order_id for update;
+  if target_order.id is null then raise exception 'ORDER_NOT_FOUND'; end if;
+  if target_order.status <> 'pending' then raise exception 'ORDER_NOT_PENDING'; end if;
+
+  select * into target_driver from public.drivers where id = p_driver_id;
+  if target_driver.id is null or not target_driver.is_active then
+    raise exception 'DRIVER_NOT_AVAILABLE';
+  end if;
+
+  if not target_order.is_reservation and exists (
+    select 1 from public.orders
+    where assigned_driver_id = p_driver_id
+      and status = 'accepted'
+      and is_reservation = false
+  ) then
+    raise exception 'DRIVER_HAS_ACTIVE_ORDER';
+  end if;
+
+  if exists (
+    select 1 from public.orders
+    where assigned_driver_id = p_driver_id
+      and status = 'accepted'
+      and is_reservation = true
+      and scheduled_at is not null
+      and scheduled_at <= now() + interval '30 minutes'
+  ) then
+    raise exception 'DRIVER_HAS_IMMINENT_RESERVATION';
+  end if;
+
+  update public.orders set
+    status = 'accepted',
+    assigned_driver_id = target_driver.id,
+    driver_name = target_driver.name,
+    driver_phone = target_driver.phone,
+    driver_plate = target_driver.plate,
+    final_fare = coalesce(p_final_fare, target_order.estimated_fare),
+    accepted_at = now()
+  where id = p_order_id
+  returning * into updated_order;
+
+  if updated_order.id is null then raise exception 'CLAIM_ORDER_EMPTY_RESULT'; end if;
+
+  update public.drivers set status = 'busy' where id = p_driver_id;
+  return to_jsonb(updated_order);
+end;
+$$;
+
 create table if not exists public.customers (
   id bigint generated always as identity primary key,
   created_at timestamptz not null default now(),

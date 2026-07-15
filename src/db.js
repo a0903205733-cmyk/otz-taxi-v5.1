@@ -19,28 +19,29 @@ export async function listOrders() {
 }
 
 export async function getOrder(id) {
-  const { data, error } = await db.from("orders").select("*").eq("id", id).single();
+  const { data, error } = await db.from("orders").select("*").eq("id", id).maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error("ORDER_NOT_FOUND");
   return data;
 }
 
 export async function updateOrder(id, values) {
-  const { data, error } = await db.from("orders").update(values).eq("id", id).select("*").single();
+  const { data, error } = await db.from("orders").update(values).eq("id", id).select("*").maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error("ORDER_NOT_FOUND");
   return data;
 }
 
 export async function claimOrder(orderId, driverId, finalFare = null) {
-  const { data, error } = await db.rpc("claim_order", {
+  const { data, error } = await db.rpc("claim_order_v2", {
     p_order_id: orderId,
     p_driver_id: driverId,
     p_final_fare: finalFare
   });
   if (error) throw error;
 
-  // claim_order returns SETOF orders so PostgREST does not try to coerce a
-  // missing/ambiguous result into one JSON object. The RPC must return exactly
-  // one claimed order on success.
+  // claim_order_v2 returns JSON directly, avoiding PostgREST single-row
+  // coercion and conflicts with older claim_order function signatures.
   const claimed = Array.isArray(data) ? data[0] : data;
   if (!claimed) {
     throw new Error("CLAIM_ORDER_EMPTY_RESULT");
@@ -83,9 +84,10 @@ export async function getDriverById(id) {
     .from("drivers")
     .select("*")
     .eq("id", id)
-    .single();
+    .maybeSingle();
 
   if (error) throw error;
+  if (!data) throw new Error("DRIVER_NOT_FOUND");
   return data;
 }
 

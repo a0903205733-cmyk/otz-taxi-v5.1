@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OTZ 車隊管理後台 V5.2.1</title>
+<title>OTZ 車隊管理後台 V5.2.2</title>
 <style>
 :root{--bg:#0b0b0c;--panel:#171719;--panel2:#232326;--gold:#d8b64f;--text:#f4f4f5;--muted:#aaa;--line:#333;--green:#1fc76a;--red:#e45151;--blue:#4b89ff}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui}
@@ -20,7 +20,7 @@ button.red{background:var(--red);color:#fff}button.green{background:var(--green)
 </style>
 </head>
 <body>
-<header>OTZ 車隊管理後台 V5.2.1</header>
+<header>OTZ 車隊管理後台 V5.2.2</header>
 <main>
 <section class="panel toolbar">
   <input id="adminToken" type="password" placeholder="管理密碼">
@@ -74,6 +74,7 @@ button.red{background:var(--red);color:#fff}button.green{background:var(--green)
 
 <section class="panel">
   <h3>司機管理</h3>
+  <label class="meta"><input id="showInactiveDrivers" type="checkbox" onchange="renderDrivers()"> 顯示已停用／封存司機</label>
   <div id="drivers" class="driver-list"></div>
 </section>
 
@@ -174,7 +175,8 @@ async function toggleDriver(id){
 }
 
 function renderDrivers(){
-  drivers.innerHTML=driverData.length?driverData.map(d=>`
+  const visibleDrivers=driverData.filter(d=>d.is_active||showInactiveDrivers.checked);
+  drivers.innerHTML=visibleDrivers.length?visibleDrivers.map(d=>`
     <div class="card">
       <b>${esc(d.name)}</b><br>
       帳號：${esc(d.username||"未設定")}<br>
