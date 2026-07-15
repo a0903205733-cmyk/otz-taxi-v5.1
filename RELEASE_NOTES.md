@@ -1,4 +1,7 @@
-# OTZ V5.2.2 Release Notes
+# OTZ V5.2.3 Release Notes
+
+- 後台派單改用畫面選擇編號映射真實司機 ID，避免輸入帳號或姓名造成 `DRIVER_NOT_FOUND`。
+- 後端新增訂單 ID、司機 ID 與車資格式驗證。
 
 - 派單改用全新 `claim_order_v2` JSON RPC，徹底避開 PostgREST 單一物件 coercion 與舊 schema cache 衝突。
 - 訂單與司機查詢改為安全的 maybe-single 處理，找不到資料時回傳明確錯誤。

@@ -38,11 +38,11 @@ subscribeToFleetChanges(event => {
   for (const client of realtimeClients) client.write(message);
 });
 
-app.get("/", (_req, res) => res.send("OTZ V5.2.2 is running"));
+app.get("/", (_req, res) => res.send("OTZ V5.2.3 is running"));
 app.get("/health", async (_req, res) => {
   const checks = {
     app: "ok",
-    version: "5.2.2",
+    version: "5.2.3",
     line: Boolean(process.env.LINE_CHANNEL_SECRET && process.env.LINE_CHANNEL_ACCESS_TOKEN),
     google_maps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
     supabase: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY),
@@ -443,13 +443,19 @@ app.post("/api/admin/drivers/:id/toggle", adminAuth, async (req, res) => {
 
 app.post("/api/admin/orders/:id/assign", adminAuth, async (req, res) => {
   try {
-    const order = await getOrder(Number(req.params.id));
+    const orderId = Number(req.params.id);
+    const driverId = Number(req.body.driverId);
+    if (!Number.isInteger(orderId) || !Number.isInteger(driverId)) {
+      return res.status(400).json({ error: "訂單或司機資料格式不正確，請重新整理後再派單" });
+    }
+
+    const order = await getOrder(orderId);
 
     if (order.status !== "pending") {
       return res.status(409).json({ error: "只有待接單可以派單" });
     }
 
-    const driver = await getDriverById(Number(req.body.driverId));
+    const driver = await getDriverById(driverId);
 
     if (!driver || !driver.is_active) {
       return res.status(404).json({ error: "找不到可用司機" });
@@ -967,5 +973,5 @@ function driverJwtAuth(req, res, next) {
 }
 
 app.listen(port, "0.0.0.0", () => {
-  console.log(`OTZ V5.2.2 listening on ${port}`);
+  console.log(`OTZ V5.2.3 listening on ${port}`);
 });
