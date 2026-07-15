@@ -13,6 +13,7 @@ export function parseRideRequest(text) {
   let routeText = normalized;
   if (rideTime) routeText = routeText.replace(rideTime, " ");
   routeText = removePassengerText(routeText)
+    .replace(/(?:要\s*)?[一二兩三四五六七八九十\d]+\s*台車/gu, " ")
     .replace(/^我要叫車\s*[,：:]*/u, "")
     .replace(/^叫車\s*[,：:]*/u, "")
     .replace(/\s+/g, " ")

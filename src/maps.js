@@ -111,12 +111,13 @@ export async function getPickupEtaMinutes(latitude, longitude, pickup, apiKey) {
 async function geocodeTaiwanAddress(value, apiKey, label) {
   const originalAddress = String(value || "").trim();
   validateKnownLandmarkConflict(originalAddress, label);
-  const address = normalizeTaiwanPlace(originalAddress);
-  const expectedCity = inferExpectedCity(originalAddress, address);
+  let address = normalizeTaiwanPlace(originalAddress);
+  let expectedCity = inferExpectedCity(originalAddress, address);
   if (!expectedCity) {
-    const error = new Error(`${label}請明確標示縣市；高雄、屏東地區可省略縣市名稱。`);
-    error.code = "LOCATION_CITY_REQUIRED";
-    throw error;
+    // OTZ 的主要營運地在東港。沒有縣市且不是已知地標時，先限縮至
+    // 東港鎮搜尋；Google 若仍回傳外縣市，後面的縣市一致性檢查會拒絕。
+    expectedCity = "屏東縣";
+    address = `屏東縣東港鎮 ${address}`;
   }
   if (!address) throw new Error(`${label}不能空白`);
 
@@ -214,6 +215,21 @@ function normalizeTaiwanPlace(value) {
   const text = String(value || "").trim();
   const compact = text.replace(/[\s()（）]/g, "");
   const aliases = [
+    {
+      exactOnly: true,
+      matches: ["東山", "東山KTV", "東山ktv", "東山視聽歡唱"],
+      address: "東山視聽歡唱 屏東縣東港鎮明德路37號"
+    },
+    {
+      exactOnly: true,
+      matches: ["星光", "星光KTV", "星光ktv", "星光大道", "星光大道KTV", "東港星光大道KTV"],
+      address: "東港星光大道KTV 屏東縣東港鎮新勝街107號2樓"
+    },
+    {
+      exactOnly: true,
+      matches: ["大東港", "大東港釣蝦場"],
+      address: "大東港釣蝦場 屏東縣東港鎮水源路63-7號"
+    },
     { exactOnly: true, matches: ["東港", "東港鎮"], address: "屏東縣東港鎮" },
     { exactOnly: true, matches: ["林邊", "林邊鄉"], address: "屏東縣林邊鄉" },
     { exactOnly: true, matches: ["潮州", "潮州鎮"], address: "屏東縣潮州鎮" },
