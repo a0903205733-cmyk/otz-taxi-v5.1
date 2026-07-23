@@ -8,7 +8,7 @@ import {
   hasRideIntent, isPlaceholderPlace, containsUnsupportedArea
 } from "./parser.js";
 import { getRoute, getPickupEtaMinutes, validatePickupLocation } from "./maps.js";
-import { calculateFare } from "./fare.js";
+import { calculateDonggangTownFare, calculateFare, isDonggangTownTrip } from "./fare.js";
 import { quoteFlex, pickupOnlyFlex, orderNo } from "./messages.js";
 import {
   createOrder, listOrders, getOrder, updateOrder, claimOrder,
@@ -187,7 +187,9 @@ async function handleText(event) {
     );
 
     const toll = Number(settings.default_toll ?? process.env.DEFAULT_TOLL ?? 0);
-    const fare = calculateFare(route.distanceKm, route.durationMin, toll, settings);
+    const fare = isDonggangTownTrip(parsed.pickup, parsed.destination, route)
+      ? calculateDonggangTownFare()
+      : calculateFare(route.distanceKm, route.durationMin, toll, settings);
     const areas = String(process.env.SERVICE_AREAS || "東港,潮州,林邊,佳冬,枋寮").split(",");
     const inServiceArea = areas.some(area =>
       `${parsed.pickup} ${parsed.destination}`.includes(area.trim())

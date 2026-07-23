@@ -12,3 +12,23 @@ export function calculateFare(distanceKm, durationMin, toll = 0, settings = {}) 
 
   return { baseFare, mileageFare, timeFare, nightSurcharge, estimatedFare };
 }
+
+export function isDonggangTownTrip(pickup, destination, route = {}) {
+  return isDonggangTownPlace(pickup, route.originAddress) &&
+    isDonggangTownPlace(destination, route.destinationAddress);
+}
+
+export function calculateDonggangTownFare() {
+  return {
+    baseFare: 150,
+    mileageFare: 0,
+    timeFare: 0,
+    nightSurcharge: 0,
+    estimatedFare: 150
+  };
+}
+
+function isDonggangTownPlace(input, formattedAddress) {
+  const text = `${input || ""} ${formattedAddress || ""}`.replace(/\s+/g, "");
+  return text.includes("屏東縣東港鎮") || text.includes("東港鎮");
+}
