@@ -22,6 +22,9 @@ button.green{background:var(--green)}button.blue{background:var(--blue);color:#f
   <h3 id="authTitle">司機登入</h3>
   <input id="registerName" placeholder="使用者名稱" style="display:none">
   <input id="registerPhone" placeholder="手機號碼 09xxxxxxxx" style="display:none">
+  <input id="registerPlate" placeholder="車牌號碼" style="display:none">
+  <input id="registerVehicle" placeholder="車型，例如 Toyota Wish" style="display:none">
+  <input id="registerVehicleName" placeholder="車輛名稱，例如 白色七人座" style="display:none">
   <input id="username" placeholder="司機帳號">
   <input id="password" type="password" placeholder="密碼">
   <button onclick="login()">登入</button>
@@ -80,8 +83,7 @@ async function login(){
 function toggleRegister(enabled){
   registerMode=enabled;
   authTitle.textContent=enabled?"司機註冊":"司機登入";
-  registerName.style.display=enabled?"block":"none";
-  registerPhone.style.display=enabled?"block":"none";
+  [registerName,registerPhone,registerPlate,registerVehicle,registerVehicleName].forEach(el=>el.style.display=enabled?"block":"none");
   document.querySelector("#loginCard button").textContent=enabled?"完成註冊":"登入";
   document.querySelector("#loginCard button.gray").textContent=enabled?"返回登入":"註冊";
   document.querySelector("#loginCard button.gray").onclick=()=>toggleRegister(!enabled);
@@ -97,6 +99,9 @@ async function registerDriver(){
       body:JSON.stringify({
         name:registerName.value.trim(),
         phone:registerPhone.value.trim()||account,
+        plate:registerPlate.value.trim(),
+        vehicle:registerVehicle.value.trim(),
+        vehicleName:registerVehicleName.value.trim(),
         username:account,
         password:password.value
       })

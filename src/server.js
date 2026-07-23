@@ -359,6 +359,9 @@ app.post("/api/driver/register", async (req, res) => {
     const username = String(req.body.username || "").trim();
     const password = String(req.body.password || "");
     const phone = String(req.body.phone || "").trim();
+    const plate = String(req.body.plate || "").trim().toUpperCase();
+    const vehicle = String(req.body.vehicle || req.body.vehicleModel || "").trim();
+    const vehicleName = String(req.body.vehicleName || "").trim();
 
     if (!name || !username || !phone || password.length < 8) {
       return res.status(400).json({ error: "姓名、手機、帳號必填，密碼至少 8 個字元" });
@@ -374,11 +377,29 @@ app.post("/api/driver/register", async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
+    let assignedVehicle = null;
+    if (plate && vehicle) {
+      try {
+        assignedVehicle = await createVehicle({
+          plate,
+          brand: vehicleName || null,
+          model: vehicle,
+          color: null,
+          seats: 4,
+          is_active: true
+        });
+      } catch (error) {
+        if (String(error.code) !== "23505") throw error;
+      }
+    }
     const driver = await createDriver({
       name,
       username,
       password_hash: passwordHash,
       phone,
+      plate: assignedVehicle?.plate || plate || null,
+      vehicle: assignedVehicle?.model || vehicle || vehicleName || null,
+      vehicle_id: assignedVehicle?.id || null,
       member_role: "driver",
       status: "available",
       is_active: true
@@ -390,7 +411,7 @@ app.post("/api/driver/register", async (req, res) => {
       action: "driver.self_register",
       entity_type: "driver",
       entity_id: String(driver.id),
-      details: { username, phone }
+      details: { username, phone, plate, vehicle, vehicle_name: vehicleName }
     });
 
     res.status(201).json({
@@ -398,6 +419,8 @@ app.post("/api/driver/register", async (req, res) => {
       name: driver.name,
       username: driver.username,
       phone: driver.phone,
+      plate: driver.plate,
+      vehicle: driver.vehicle,
       status: driver.status
     });
   } catch (error) {
