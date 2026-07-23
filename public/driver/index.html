@@ -19,9 +19,13 @@ button.green{background:var(--green)}button.blue{background:var(--blue);color:#f
 <header>OTZ 司機端 V4.2</header>
 <main>
 <section id="loginCard" class="card">
+  <h3 id="authTitle">司機登入</h3>
+  <input id="registerName" placeholder="使用者名稱" style="display:none">
+  <input id="registerPhone" placeholder="手機號碼 09xxxxxxxx" style="display:none">
   <input id="username" placeholder="司機帳號">
   <input id="password" type="password" placeholder="密碼">
   <button onclick="login()">登入</button>
+  <button class="gray" onclick="toggleRegister(true)">註冊</button>
   <div id="loginMsg"></div>
 </section>
 
@@ -45,6 +49,7 @@ let authToken=localStorage.getItem("otzDriverJwt")||"";
 let me=null;
 let eventSource=null,previousPending=new Set();
 let gpsWatchId=null,lastLocationSentAt=0,lastGpsPosition=null;
+let registerMode=false;
 
 async function api(url,opt={}){
   opt.headers={...(opt.headers||{})};
@@ -56,6 +61,7 @@ async function api(url,opt={}){
 }
 
 async function login(){
+  if(registerMode) return registerDriver();
   try{
     const data=await api("/api/driver/login",{
       method:"POST",
@@ -68,6 +74,35 @@ async function login(){
     authToken=data.token;
     localStorage.setItem("otzDriverJwt",authToken);
     await init();
+  }catch(e){loginMsg.textContent=e.message}
+}
+
+function toggleRegister(enabled){
+  registerMode=enabled;
+  authTitle.textContent=enabled?"司機註冊":"司機登入";
+  registerName.style.display=enabled?"block":"none";
+  registerPhone.style.display=enabled?"block":"none";
+  document.querySelector("#loginCard button").textContent=enabled?"完成註冊":"登入";
+  document.querySelector("#loginCard button.gray").textContent=enabled?"返回登入":"註冊";
+  document.querySelector("#loginCard button.gray").onclick=()=>toggleRegister(!enabled);
+  loginMsg.textContent="";
+}
+
+async function registerDriver(){
+  try{
+    const account=username.value.trim();
+    const data=await api("/api/driver/register",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        name:registerName.value.trim(),
+        phone:registerPhone.value.trim()||account,
+        username:account,
+        password:password.value
+      })
+    });
+    loginMsg.textContent=`註冊完成：${data.name}，請登入`;
+    toggleRegister(false);
   }catch(e){loginMsg.textContent=e.message}
 }
 

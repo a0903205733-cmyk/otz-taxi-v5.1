@@ -353,6 +353,58 @@ app.post("/api/driver/login", async (req, res) => {
   }
 });
 
+app.post("/api/driver/register", async (req, res) => {
+  try {
+    const name = String(req.body.name || "").trim();
+    const username = String(req.body.username || "").trim();
+    const password = String(req.body.password || "");
+    const phone = String(req.body.phone || "").trim();
+
+    if (!name || !username || !phone || password.length < 8) {
+      return res.status(400).json({ error: "姓名、手機、帳號必填，密碼至少 8 個字元" });
+    }
+
+    if (!/^09\d{8}$/.test(username) && !/^09\d{8}$/.test(phone)) {
+      return res.status(400).json({ error: "帳號或手機請輸入 09 開頭共 10 碼電話" });
+    }
+
+    const existing = await getDriverByUsername(username);
+    if (existing) {
+      return res.status(409).json({ error: "司機帳號已存在，請直接登入" });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const driver = await createDriver({
+      name,
+      username,
+      password_hash: passwordHash,
+      phone,
+      member_role: "driver",
+      status: "available",
+      is_active: true
+    });
+
+    await createAuditLog({
+      actor_type: "driver",
+      actor_id: String(driver.id),
+      action: "driver.self_register",
+      entity_type: "driver",
+      entity_id: String(driver.id),
+      details: { username, phone }
+    });
+
+    res.status(201).json({
+      id: driver.id,
+      name: driver.name,
+      username: driver.username,
+      phone: driver.phone,
+      status: driver.status
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get("/api/admin/orders", adminAuth, async (_req, res) => {
   try {
     res.json(await listOrders());
