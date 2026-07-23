@@ -247,14 +247,16 @@ function notifyNewOrders(orders){
   const added=[...pending].filter(id=>!previousPending.has(id));
   if(previousPending.size&&added.length){
     beep();
-    if(Notification.permission==="granted")new Notification("OTZ 新訂單",{body:`新增 ${added.length} 筆待接訂單`});
+    if("Notification" in window&&Notification.permission==="granted")new Notification("OTZ 新訂單",{body:`新增 ${added.length} 筆待接訂單`});
   }
   previousPending=pending;
-  if(Notification.permission==="default")Notification.requestPermission();
+  if("Notification" in window&&Notification.permission==="default")Notification.requestPermission();
 }
 
 function beep(){
-  const c=new(window.AudioContext||window.webkitAudioContext)(),o=c.createOscillator(),g=c.createGain();
+  const AudioContextClass=window.AudioContext||window.webkitAudioContext;
+  if(!AudioContextClass)return;
+  const c=new AudioContextClass(),o=c.createOscillator(),g=c.createGain();
   o.connect(g);g.connect(c.destination);o.frequency.value=880;g.gain.value=.12;o.start();o.stop(c.currentTime+.25);
 }
 
