@@ -247,10 +247,17 @@ function notifyNewOrders(orders){
   const added=[...pending].filter(id=>!previousPending.has(id));
   if(previousPending.size&&added.length){
     beep();
+    notifyNativeApp(`新增 ${added.length} 筆待接訂單`);
     if("Notification" in window&&Notification.permission==="granted")new Notification("OTZ 新訂單",{body:`新增 ${added.length} 筆待接訂單`});
   }
   previousPending=pending;
   if("Notification" in window&&Notification.permission==="default")Notification.requestPermission();
+}
+
+function notifyNativeApp(body){
+  if(window.OTZApp&&typeof window.OTZApp.notifyNewOrder==="function"){
+    window.OTZApp.notifyNewOrder("OTZ 新訂單",body);
+  }
 }
 
 function beep(){
