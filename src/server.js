@@ -226,7 +226,8 @@ async function handleText(event) {
 
   try {
     if (!parsed.destination) {
-      return reply(event.replyToken, "請同時提供上車地點與下車地點，資料完整後才會建立訂單。");
+      console.log("Ignored pickup-only ride request");
+      return;
     }
     const schedule = classifyRideSchedule(parsed.rideTime);
     const route = await getRoute(
