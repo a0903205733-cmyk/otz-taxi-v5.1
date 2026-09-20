@@ -32,8 +32,10 @@ const line = new messagingApi.MessagingApiClient({
 
 const realtimeClients = new Set();
 const pickupEtaCache = new Map();
+const humanHandoffTimers = new Map();
 const DEFAULT_ADMIN_TOKEN = "0908160150";
 const LINE_MUTED_SOURCES_SETTING = "muted_line_sources";
+const HUMAN_HANDOFF_AUTO_RESUME_MS = 3 * 60 * 1000;
 const HUMAN_HANDOFF_KEYWORDS = new Set([
   "人工介入", "轉人工", "人工客服",
   "手動聊天", "開始手動聊天", "人工聊天", "開始人工聊天"
@@ -90,13 +92,21 @@ app.post("/webhook", middleware({ channelSecret: process.env.LINE_CHANNEL_SECRET
 async function handleLineEvent(event) {
   const sourceKey = getLineSourceKey(event);
 
+  if (isManualChatMessageEvent(event)) {
+    await startHumanHandoff(sourceKey, "manual-chat-message");
+    return;
+  }
+
   if (event.type === "chatControl") {
     const mode = String(event.chatControl?.chatMode || event.chatControl?.mode || "").toLowerCase();
     const isManual = ["active", "manual", "human", "on"].includes(mode);
     const isBot = ["standby", "bot", "auto", "off"].includes(mode);
 
-    if (isManual || isBot) {
-      await setLineSourceMuted(sourceKey, isManual);
+    if (isManual) {
+      await startHumanHandoff(sourceKey, `chat-control:${mode}`);
+      console.log(`LINE chat control ${sourceKey}: ${mode}`);
+    } else if (isBot) {
+      await stopHumanHandoff(sourceKey);
       console.log(`LINE chat control ${sourceKey}: ${mode}`);
     }
     return;
@@ -106,13 +116,13 @@ async function handleLineEvent(event) {
     const incomingText = String(event.message.text || "").trim();
 
     if (BOT_RESUME_KEYWORDS.has(incomingText)) {
-      await setLineSourceMuted(sourceKey, false);
+      await stopHumanHandoff(sourceKey);
       return reply(event.replyToken, "已恢復機器人自動回覆。");
     }
 
     if (HUMAN_HANDOFF_KEYWORDS.has(incomingText)) {
-      await setLineSourceMuted(sourceKey, true);
-      return reply(event.replyToken, "已切換人工處理，此聊天窗口的機器人自動回覆已關閉。");
+      await startHumanHandoff(sourceKey, "keyword");
+      return reply(event.replyToken, "已切換人工處理，此聊天窗口的機器人自動回覆已關閉，3 分鐘無真人客服回應後會自動恢復。");
     }
   }
 
@@ -1168,6 +1178,12 @@ function getLineSourceKey(event) {
   return `user:${event.source.userId || ""}`;
 }
 
+function isManualChatMessageEvent(event) {
+  if (event?.type !== "message") return false;
+  if (event.replyToken) return false;
+  return ["text", "sticker"].includes(event.message?.type);
+}
+
 async function getMutedLineSources() {
   const settings = await listSettings();
   const value = settings[LINE_MUTED_SOURCES_SETTING];
@@ -1182,6 +1198,38 @@ async function isLineSourceMuted(sourceKey) {
   if (!sourceKey) return false;
   const mutedSources = await getMutedLineSources();
   return mutedSources.has(sourceKey);
+}
+
+async function startHumanHandoff(sourceKey, reason) {
+  if (!sourceKey) return;
+  await setLineSourceMuted(sourceKey, true);
+
+  if (humanHandoffTimers.has(sourceKey)) {
+    clearTimeout(humanHandoffTimers.get(sourceKey));
+  }
+
+  const timer = setTimeout(async () => {
+    try {
+      await setLineSourceMuted(sourceKey, false);
+      console.log(`Human handoff auto-resumed: ${sourceKey}`);
+    } catch (error) {
+      console.error(`Human handoff auto-resume failed for ${sourceKey}:`, error);
+    } finally {
+      humanHandoffTimers.delete(sourceKey);
+    }
+  }, HUMAN_HANDOFF_AUTO_RESUME_MS);
+
+  humanHandoffTimers.set(sourceKey, timer);
+  console.log(`Human handoff muted ${sourceKey}: ${reason}`);
+}
+
+async function stopHumanHandoff(sourceKey) {
+  if (!sourceKey) return;
+  if (humanHandoffTimers.has(sourceKey)) {
+    clearTimeout(humanHandoffTimers.get(sourceKey));
+    humanHandoffTimers.delete(sourceKey);
+  }
+  await setLineSourceMuted(sourceKey, false);
 }
 
 async function setLineSourceMuted(sourceKey, muted) {
