@@ -88,7 +88,7 @@ async function handleText(event) {
   if (incomingText === "我要試算車資") {
     return reply(event.replyToken, "請問上下車地點");
   }
-  if (incomingText === "我要叫車") {
+  if (["我要叫車", "我想叫車"].includes(incomingText)) {
     const settings = await listSettings();
     return reply(
       event.replyToken,
