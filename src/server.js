@@ -320,10 +320,7 @@ async function handleMutedText(event) {
     );
   } catch (error) {
     console.error("Muted quote error:", error);
-    if (["LOCATION_OUTSIDE_TAIWAN", "LOCATION_AMBIGUOUS", "LOCATION_CONFLICT", "LOCATION_CITY_REQUIRED"].includes(error.code)) {
-      return reply(event.replyToken, `⚠️ ${error.message}`);
-    }
-    return reply(event.replyToken, "目前無法完成試算，請稍後再試。");
+    return;
   }
 }
 
