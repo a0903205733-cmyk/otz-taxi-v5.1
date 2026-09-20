@@ -127,6 +127,9 @@ async function handleLineEvent(event) {
   }
 
   if (await isLineSourceMuted(sourceKey)) {
+    if (event.type === "message" && event.message.type === "text") {
+      return handleMutedText(event);
+    }
     console.log(`Muted LINE source skipped: ${sourceKey}`);
     return;
   }
@@ -306,6 +309,50 @@ async function handleText(event) {
       return reply(event.replyToken, `⚠️ ${error.message}\nOTZ 車隊目前只接受台灣本島的上下車地點，不接受外島或國外行程。`);
     }
     return reply(event.replyToken, "目前無法完成估價，請稍後再試。");
+  }
+}
+
+async function handleMutedText(event) {
+  const incomingText = String(event.message.text || "").trim();
+  if (incomingText === "我要試算車資") {
+    return reply(event.replyToken, "請問上下車地點");
+  }
+
+  const quoteText = incomingText.replace(/^我要試算車資[，,、:：\s]*/u, "");
+  const parsed = parseRideRequest(quoteText);
+  if (!parsed.pickup || !parsed.destination || !isGroupRideRequest(quoteText, parsed)) {
+    console.log("Muted LINE source ignored non-quote message");
+    return;
+  }
+
+  try {
+    const settings = await listSettings();
+    const route = await getRoute(
+      parsed.pickup,
+      parsed.destination,
+      process.env.GOOGLE_MAPS_API_KEY,
+      settings
+    );
+    const toll = Number(settings.default_toll ?? process.env.DEFAULT_TOLL ?? 0);
+    const fare = isDonggangTownTrip(parsed.pickup, parsed.destination, route)
+      ? calculateDonggangTownFare()
+      : calculateFare(route.distanceKm, route.durationMin, toll, settings);
+
+    return reply(
+      event.replyToken,
+      "試算車資如下：\n" +
+        `上車：${parsed.pickup}\n` +
+        `下車：${parsed.destination}\n` +
+        `距離：約 ${Number(route.distanceKm).toFixed(1)} 公里\n` +
+        `車程：約 ${Math.ceil(Number(route.durationMin))} 分鐘\n` +
+        `預估車資：約 ${fare.estimatedFare} 元`
+    );
+  } catch (error) {
+    console.error("Muted quote error:", error);
+    if (["LOCATION_OUTSIDE_TAIWAN", "LOCATION_AMBIGUOUS", "LOCATION_CONFLICT", "LOCATION_CITY_REQUIRED"].includes(error.code)) {
+      return reply(event.replyToken, `⚠️ ${error.message}`);
+    }
+    return reply(event.replyToken, "目前無法完成試算，請稍後再試。");
   }
 }
 
