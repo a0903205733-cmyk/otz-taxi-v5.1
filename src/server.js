@@ -33,6 +33,9 @@ const line = new messagingApi.MessagingApiClient({
 const realtimeClients = new Set();
 const pickupEtaCache = new Map();
 const DEFAULT_ADMIN_TOKEN = "0908160150";
+const LINE_MUTED_SOURCES_SETTING = "muted_line_sources";
+const HUMAN_HANDOFF_KEYWORDS = new Set(["人工介入", "轉人工", "人工客服"]);
+const BOT_RESUME_KEYWORDS = new Set(["解除人工介入", "恢復機器人", "開啟機器人"]);
 const PICKUP_ETA_LIMIT_MINUTES = 20;
 const LOCATION_MAX_AGE_MS = 2 * 60 * 1000;
 const ETA_CACHE_MS = 5 * 60 * 1000;
@@ -79,6 +82,26 @@ app.post("/webhook", middleware({ channelSecret: process.env.LINE_CHANNEL_SECRET
 });
 
 async function handleLineEvent(event) {
+  const sourceKey = getLineSourceKey(event);
+  if (event.type === "message" && event.message.type === "text") {
+    const incomingText = String(event.message.text || "").trim();
+
+    if (BOT_RESUME_KEYWORDS.has(incomingText)) {
+      await setLineSourceMuted(sourceKey, false);
+      return reply(event.replyToken, "已恢復機器人自動回覆。");
+    }
+
+    if (HUMAN_HANDOFF_KEYWORDS.has(incomingText)) {
+      await setLineSourceMuted(sourceKey, true);
+      return reply(event.replyToken, "已切換人工處理，此聊天窗口的機器人自動回覆已關閉。");
+    }
+  }
+
+  if (await isLineSourceMuted(sourceKey)) {
+    console.log(`Muted LINE source skipped: ${sourceKey}`);
+    return;
+  }
+
   if (event.type === "message" && event.message.type === "text") return handleText(event);
   if (event.type === "postback") return handlePostback(event);
 }
@@ -1117,6 +1140,40 @@ async function getLineNickname(event) {
     console.warn("LINE profile lookup failed:", error.message);
     return "";
   }
+}
+
+function getLineSourceKey(event) {
+  if (!event?.source?.type) return "";
+  if (event.source.type === "group") return `group:${event.source.groupId || ""}`;
+  if (event.source.type === "room") return `room:${event.source.roomId || ""}`;
+  return `user:${event.source.userId || ""}`;
+}
+
+async function getMutedLineSources() {
+  const settings = await listSettings();
+  const value = settings[LINE_MUTED_SOURCES_SETTING];
+  if (Array.isArray(value)) return new Set(value.filter(Boolean));
+  if (value && typeof value === "object") {
+    return new Set(Object.entries(value).filter(([, muted]) => muted).map(([key]) => key));
+  }
+  return new Set();
+}
+
+async function isLineSourceMuted(sourceKey) {
+  if (!sourceKey) return false;
+  const mutedSources = await getMutedLineSources();
+  return mutedSources.has(sourceKey);
+}
+
+async function setLineSourceMuted(sourceKey, muted) {
+  if (!sourceKey) return;
+  const mutedSources = await getMutedLineSources();
+  if (muted) {
+    mutedSources.add(sourceKey);
+  } else {
+    mutedSources.delete(sourceKey);
+  }
+  await updateSetting(LINE_MUTED_SOURCES_SETTING, [...mutedSources]);
 }
 
 function normalizeLineText(value) {
