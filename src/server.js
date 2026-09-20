@@ -88,6 +88,14 @@ async function handleText(event) {
   if (incomingText === "我要試算車資") {
     return reply(event.replyToken, "請問上下車地點");
   }
+  if (incomingText === "我要叫車") {
+    const settings = await listSettings();
+    return reply(
+      event.replyToken,
+      settings.line_welcome_message ||
+        "請輸入：上車地點到下車地點、時間、人數\n例如：明天早上8點，東港碼頭到左營高鐵，2位"
+    );
+  }
   const isGroupChat = ["group", "room"].includes(event.source?.type);
   const rideText = incomingText.replace(/^我要叫車[，,、:：\s]*/, "");
   const parsed = parseRideRequest(rideText);
