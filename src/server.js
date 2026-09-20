@@ -85,6 +85,9 @@ async function handleLineEvent(event) {
 
 async function handleText(event) {
   const incomingText = String(event.message.text || "").trim();
+  if (incomingText === "我要試算車資") {
+    return reply(event.replyToken, "請問上下車地點");
+  }
   const isGroupChat = ["group", "room"].includes(event.source?.type);
   const rideText = incomingText.replace(/^我要叫車[，,、:：\s]*/, "");
   const parsed = parseRideRequest(rideText);
