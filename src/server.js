@@ -88,7 +88,19 @@ async function handleText(event) {
   if (incomingText === "我要試算車資") {
     return reply(event.replyToken, "請問上下車地點");
   }
-  if (["我要叫車", "我想叫車"].includes(incomingText)) {
+  if (incomingText === "我想叫車") {
+    const nickname = await getLineNickname(event);
+    return reply(
+      event.replyToken,
+      `${nickname}請提供您的上下車地點\n` +
+        "🔴➡️ 上車地點（必填）：\n" +
+        "🔴➡️ 下車地點（必填）：\n" +
+        "🔴➡️ 人數 ：\n" +
+        "🔴➡️ 行李 ：\n" +
+        "🔴➡️ 特殊需求："
+    );
+  }
+  if (incomingText === "我要叫車") {
     const settings = await listSettings();
     return reply(
       event.replyToken,
@@ -1085,6 +1097,26 @@ function reply(replyToken, text) {
     replyToken,
     messages: [{ type: "text", text: normalizeLineText(text) }]
   });
+}
+
+async function getLineNickname(event) {
+  const userId = event.source?.userId;
+  if (!userId) return "";
+
+  try {
+    let profile;
+    if (event.source?.type === "group" && event.source?.groupId) {
+      profile = await line.getGroupMemberProfile(event.source.groupId, userId);
+    } else if (event.source?.type === "room" && event.source?.roomId) {
+      profile = await line.getRoomMemberProfile(event.source.roomId, userId);
+    } else {
+      profile = await line.getProfile(userId);
+    }
+    return profile?.displayName ? `${profile.displayName}` : "";
+  } catch (error) {
+    console.warn("LINE profile lookup failed:", error.message);
+    return "";
+  }
 }
 
 function normalizeLineText(value) {
