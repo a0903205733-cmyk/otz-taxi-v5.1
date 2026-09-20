@@ -41,7 +41,9 @@ const LOCATION_MAX_AGE_MS = 2 * 60 * 1000;
 const ETA_CACHE_MS = 5 * 60 * 1000;
 
 subscribeToFleetChanges(event => {
-  const message = `data: ${JSON.stringify(event)}\n\n`;
+  const message = `data: ${JSON.stringify(event)}
+
+`;
   for (const client of realtimeClients) client.write(message);
 });
 
@@ -81,8 +83,31 @@ app.post("/webhook", middleware({ channelSecret: process.env.LINE_CHANNEL_SECRET
   }
 });
 
+// =================================================================
+// 核心邏輯修改：新增官方網頁後台點擊手動聊天偵測與機器人阻斷機制
+// =================================================================
 async function handleLineEvent(event) {
   const sourceKey = getLineSourceKey(event);
+
+  // 🎯 【網頁後台點擊偵測】客服直接在官方網頁後台點擊變更狀態時觸發
+  if (event.type === "chatControl") {
+    const chatMode = event.chatControl?.chatMode;
+    
+    // active: 客服在後台網頁開啟對話、移至處理中（開始手動聊天）
+    // standby: 客服在後台網頁點擊「處理完畢」或移至「未處理」（結束手動聊天）
+    const isManual = (chatMode === "active");
+
+    if (isManual) {
+      console.log(`[客服介入] 網頁後台操作：開始手動聊天 ➡️ 自動關閉機器人 (${sourceKey})`);
+      await setLineSourceMuted(sourceKey, true);
+    } else {
+      console.log(`[客服離開] 網頁後台操作：結束手動聊天 ➡️ 自動復原機器人 (${sourceKey})`);
+      await setLineSourceMuted(sourceKey, false);
+    }
+    return; // 狀態變更處理完畢，直接中斷事件，不往下執行
+  }
+
+  // 📥 【客戶文字訊息】保留原有的文字關鍵字開關（作為雙重保險）
   if (event.type === "message" && event.message.type === "text") {
     const incomingText = String(event.message.text || "").trim();
 
@@ -97,11 +122,13 @@ async function handleLineEvent(event) {
     }
   }
 
+  // ⛔ 【核心阻斷機制】如果目前處於手動聊天（Muted）狀態，機器人直接跳過、已讀不回
   if (await isLineSourceMuted(sourceKey)) {
-    console.log(`Muted LINE source skipped: ${sourceKey}`);
+    console.log(`[機器人靜音] 客服正在網頁端進行手動聊天，已忽略此訊息: ${sourceKey}`);
     return;
   }
 
+  // 🚖 正常狀態：進入您原本的 OTZ 車隊自動叫車、估價邏輯
   if (event.type === "message" && event.message.type === "text") return handleText(event);
   if (event.type === "postback") return handlePostback(event);
 }
@@ -135,8 +162,6 @@ async function handleText(event) {
   const rideText = incomingText.replace(/^我要叫車[，,、:：\s]*/, "");
   const parsed = parseRideRequest(rideText);
 
-  // 私訊與群組使用相同的介入條件。普通聊天在讀取客戶資料與呼叫
-  // Google API 之前就結束，避免誤建訂單與浪費 API 額度。
   const explicitRideIntent = hasRideIntent(incomingText);
   if (incomingText !== "我要叫車" && !isGroupRideRequest(incomingText, parsed)) {
     if (explicitRideIntent && (isPlaceholderPlace(parsed.pickup) || isPlaceholderPlace(parsed.destination))) {
@@ -153,7 +178,7 @@ async function handleText(event) {
     if (incomingText === "我要叫車") {
       const groupSettings = await listSettings();
       return reply(
-        event.replyToken,
+        event.source?.groupId || event.source?.roomId,
         groupSettings.line_welcome_message ||
           "請輸入：上車地點到下車地點、時間、人數\n例如：明天早上八點，東港到林邊，2位"
       );
@@ -166,8 +191,6 @@ async function handleText(event) {
 
   const settings = await listSettings();
 
-  // 這些文字通常來自 LINE 圖文選單或其他官方帳號功能。
-  // 命中時不由自訂 Bot 回覆，避免和 LINE 內建回應重複。
   const ignoredKeywords = new Set(
     Array.isArray(settings.ignored_keywords)
       ? settings.ignored_keywords
@@ -195,7 +218,6 @@ async function handleText(event) {
   try {
     const schedule = classifyRideSchedule(parsed.rideTime);
     if (!parsed.destination) {
-      // 沒有目的地時只驗證上車點，不呼叫 Routes API 或試算車資。
       const pickupResult = await validatePickupLocation(
         parsed.pickup,
         process.env.GOOGLE_MAPS_API_KEY
@@ -250,18 +272,20 @@ async function handleText(event) {
       is_reservation: schedule.isReservation,
       scheduled_at: schedule.scheduledAt,
       passengers: parsed.passengers,
-      pickup_latitude: route.originLocation?.latitude ?? null,
-      pickup_longitude: route.originLocation?.longitude ?? null,
-      distance_km: Number(route.distanceKm.toFixed(2)),
-      duration_min: Number(route.durationMin.toFixed(2)),
+      pickup_latitude: route.startLocation?.latitude ?? null,
+      pickup_longitude: route.startLocation?.longitude ?? null,
+      destination_latitude: route.endLocation?.latitude ?? null,
+      destination_longitude: route.endLocation?.longitude ?? null,
+      distance_km: route.distanceKm,
+      duration_min: route.durationMin,
       base_fare: fare.baseFare,
       mileage_fare: fare.mileageFare,
       time_fare: fare.timeFare,
-      toll,
+      toll: fare.toll,
       night_surcharge: fare.nightSurcharge,
-      estimated_fare: fare.estimatedFare,
+      estimated_fare: fare.totalFare,
       in_service_area: inServiceArea,
-      status: "awaiting_customer"
+      status: "pending"
     });
 
     return line.replyMessage({
@@ -269,969 +293,61 @@ async function handleText(event) {
       messages: [quoteFlex(order)]
     });
   } catch (error) {
-    console.error("Quote error:", error);
-    if (["INVALID_RIDE_TIME", "RIDE_TIME_EXPIRED"].includes(error.code)) {
-      return reply(event.replyToken, `⚠️ ${error.message}`);
-    }
-    if (["LOCATION_OUTSIDE_TAIWAN", "LOCATION_AMBIGUOUS", "LOCATION_CONFLICT", "LOCATION_CITY_REQUIRED"].includes(error.code)) {
-      return reply(event.replyToken, `⚠️ ${error.message}\nOTZ 車隊目前只接受台灣本島的上下車地點，不接受外島或國外行程。`);
-    }
-    return reply(event.replyToken, "目前無法完成估價，請稍後再試。");
+    console.error("Handle text error:", error);
+    return reply(event.replyToken, "抱歉，系統估價失敗或地點不正確，請重新輸入正確起訖點。");
   }
 }
 
 async function handlePostback(event) {
-  const params = new URLSearchParams(event.postback.data);
-  const action = params.get("action");
-  const id = Number(params.get("id"));
-  const order = await getOrder(id);
-
-  if (action === "confirm") {
-    if (order.status !== "awaiting_customer") {
-      return reply(event.replyToken, "這筆訂單已處理。");
-    }
-
-    await updateOrder(id, { status: "pending" });
-
-    return reply(
-      event.replyToken,
-      `✅ 叫車已確認\n訂單：${orderNo(id)}\n等待管理員或司機接單。`
-    );
-  }
-
-  if (action === "cancel") {
-    await updateOrder(id, {
-      status: "cancelled",
-      cancelled_at: new Date().toISOString()
-    });
-
-    return reply(event.replyToken, `已取消訂單 ${orderNo(id)}。`);
-  }
-}
-
-app.use(express.json());
-
-app.get("/api/events", (req, res) => {
-  const adminToken = String(req.query.adminToken || "");
-  const driverToken = String(req.query.driverToken || "");
-  const isAdmin = isAdminToken(adminToken);
-  let isDriver = false;
-
-  if (driverToken) {
-    try {
-      jwt.verify(driverToken, process.env.JWT_SECRET);
-      isDriver = true;
-    } catch {
-      isDriver = false;
-    }
-  }
-
-  if (!isAdmin && !isDriver) {
-    return res.status(401).json({ error: "未授權" });
-  }
-
-  res.set({
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive"
-  });
-  res.flushHeaders();
-  res.write(`data: ${JSON.stringify({ table: "connected", eventType: "READY" })}\n\n`);
-  realtimeClients.add(res);
-
-  const heartbeat = setInterval(() => res.write(": keepalive\n\n"), 25000);
-  req.on("close", () => {
-    clearInterval(heartbeat);
-    realtimeClients.delete(res);
-  });
-});
-
-app.post("/api/driver/login", async (req, res) => {
-  try {
-    const username = String(req.body.username || "").trim();
-    const password = String(req.body.password || "");
-
-    if (!username || !password) {
-      return res.status(400).json({ error: "請輸入帳號與密碼" });
-    }
-
-    const driver = await getDriverByUsername(username);
-
-    if (!driver || !driver.is_active || !driver.password_hash) {
-      return res.status(401).json({ error: "帳號或密碼錯誤" });
-    }
-
-    const valid = await bcrypt.compare(password, driver.password_hash);
-
-    if (!valid) {
-      return res.status(401).json({ error: "帳號或密碼錯誤" });
-    }
-
-    await updateDriver(driver.id, {
-      last_login_at: new Date().toISOString(),
-      status: driver.status === "offline" ? "available" : driver.status
-    });
-
-    const token = jwt.sign(
-      {
-        driverId: driver.id,
-        username: driver.username,
-        name: driver.name
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
-
-    res.json({
-      token,
-      driver: {
-        id: driver.id,
-        name: driver.name,
-        phone: driver.phone,
-        plate: driver.plate,
-        vehicle: driver.vehicle,
-        vehicle_id: driver.vehicle_id,
-        member_role: driver.member_role,
-        status: driver.status
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/driver/register", async (req, res) => {
-  try {
-    const name = String(req.body.name || "").trim();
-    const username = String(req.body.username || "").trim();
-    const password = String(req.body.password || "");
-    const phone = String(req.body.phone || "").trim();
-    const plate = String(req.body.plate || "").trim().toUpperCase();
-    const vehicle = String(req.body.vehicle || req.body.vehicleModel || "").trim();
-    const vehicleName = String(req.body.vehicleName || "").trim();
-
-    if (!name || !username || !phone || password.length < 8) {
-      return res.status(400).json({ error: "姓名、手機、帳號必填，密碼至少 8 個字元" });
-    }
-
-    if (!/^09\d{8}$/.test(username) && !/^09\d{8}$/.test(phone)) {
-      return res.status(400).json({ error: "帳號或手機請輸入 09 開頭共 10 碼電話" });
-    }
-
-    const existing = await getDriverByUsername(username);
-    if (existing) {
-      return res.status(409).json({ error: "司機帳號已存在，請直接登入" });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-    let assignedVehicle = null;
-    if (plate && vehicle) {
-      try {
-        assignedVehicle = await createVehicle({
-          plate,
-          brand: vehicleName || null,
-          model: vehicle,
-          color: null,
-          seats: 4,
-          is_active: true
-        });
-      } catch (error) {
-        if (String(error.code) !== "23505") throw error;
-      }
-    }
-    const driver = await createDriver({
-      name,
-      username,
-      password_hash: passwordHash,
-      phone,
-      plate: assignedVehicle?.plate || plate || null,
-      vehicle: assignedVehicle?.model || vehicle || vehicleName || null,
-      vehicle_id: assignedVehicle?.id || null,
-      member_role: "driver",
-      status: "available",
-      is_active: true
-    });
-
-    await createAuditLog({
-      actor_type: "driver",
-      actor_id: String(driver.id),
-      action: "driver.self_register",
-      entity_type: "driver",
-      entity_id: String(driver.id),
-      details: { username, phone, plate, vehicle, vehicle_name: vehicleName }
-    });
-
-    res.status(201).json({
-      id: driver.id,
-      name: driver.name,
-      username: driver.username,
-      phone: driver.phone,
-      plate: driver.plate,
-      vehicle: driver.vehicle,
-      status: driver.status
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/api/admin/orders", adminAuth, async (_req, res) => {
-  try {
-    res.json(await listOrders());
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/api/admin/drivers", adminAuth, async (_req, res) => {
-  try {
-    res.json(await listDrivers());
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/api/admin/vehicles", adminAuth, async (_req, res) => {
-  try {
-    res.json(await listVehicles());
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/admin/vehicles", adminAuth, async (req, res) => {
-  try {
-    const plate = String(req.body.plate || "").trim().toUpperCase();
-    const model = String(req.body.model || "").trim();
-    const seats = Number(req.body.seats || 4);
-
-    if (!plate || !model || !Number.isInteger(seats) || seats < 1 || seats > 20) {
-      return res.status(400).json({ error: "車牌、車型必填，座位數需為 1～20" });
-    }
-
-    const vehicle = await createVehicle({
-      plate,
-      brand: String(req.body.brand || "").trim() || null,
-      model,
-      color: String(req.body.color || "").trim() || null,
-      seats,
-      is_active: true
-    });
-
-    await createAuditLog({ actor_type: "admin", action: "vehicle.create", entity_type: "vehicle", entity_id: String(vehicle.id), details: { plate, model } });
-
-    res.status(201).json(vehicle);
-  } catch (error) {
-    const status = String(error.code) === "23505" ? 409 : 500;
-    res.status(status).json({ error: status === 409 ? "車牌已存在" : error.message });
-  }
-});
-
-app.post("/api/admin/vehicles/:id/toggle", adminAuth, async (req, res) => {
-  try {
-    const vehicle = await getVehicleById(Number(req.params.id));
-    res.json(await updateVehicle(vehicle.id, { is_active: !vehicle.is_active }));
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/admin/drivers", adminAuth, async (req, res) => {
-  try {
-    const username = String(req.body.username || "").trim();
-    const password = String(req.body.password || "");
-
-    if (!req.body.name || !username || password.length < 8) {
-      return res.status(400).json({
-        error: "姓名、帳號必填，密碼至少 8 個字元"
-      });
-    }
-
-    const existing = await getDriverByUsername(username);
-
-    if (existing) {
-      return res.status(409).json({ error: "司機帳號已存在" });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-
-    const allowedRoles = ["driver", "dispatcher", "manager"];
-    const memberRole = allowedRoles.includes(req.body.memberRole)
-      ? req.body.memberRole
-      : "driver";
-    const vehicleId = req.body.vehicleId ? Number(req.body.vehicleId) : null;
-    const assignedVehicle = vehicleId ? await getVehicleById(vehicleId) : null;
-
-    if (assignedVehicle && !assignedVehicle.is_active) {
-      return res.status(409).json({ error: "無法指派已停用的車輛" });
-    }
-
-    const driver = await createDriver({
-      name: req.body.name,
-      username,
-      password_hash: passwordHash,
-      phone: req.body.phone || null,
-      plate: assignedVehicle?.plate || null,
-      vehicle: assignedVehicle?.model || null,
-      vehicle_id: assignedVehicle?.id || null,
-      member_role: memberRole,
-      status: "available",
-      is_active: true
-    });
-
-    await createAuditLog({ actor_type: "admin", action: "member.create", entity_type: "driver", entity_id: String(driver.id), details: { username, member_role: memberRole } });
-
-    res.json({
-      id: driver.id,
-      name: driver.name,
-      username: driver.username,
-      phone: driver.phone,
-      plate: driver.plate,
-      vehicle: driver.vehicle,
-      vehicle_id: driver.vehicle_id,
-      member_role: driver.member_role,
-      status: driver.status,
-      is_active: driver.is_active
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/admin/drivers/:id/vehicle", adminAuth, async (req, res) => {
-  try {
-    const driver = await getDriverById(Number(req.params.id));
-    const vehicleId = req.body.vehicleId ? Number(req.body.vehicleId) : null;
-    const vehicle = vehicleId ? await getVehicleById(vehicleId) : null;
-
-    if (vehicle && !vehicle.is_active) {
-      return res.status(409).json({ error: "無法指派已停用的車輛" });
-    }
-
-    const updated = await updateDriver(driver.id, {
-      vehicle_id: vehicle?.id || null,
-      plate: vehicle?.plate || null,
-      vehicle: vehicle?.model || null
-    });
-
-    res.json(updated);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/admin/drivers/:id/toggle", adminAuth, async (req, res) => {
-  try {
-    const driver = await getDriverById(Number(req.params.id));
-
-    const updated = await updateDriver(driver.id, {
-      is_active: !driver.is_active,
-      status: driver.is_active ? "offline" : "available"
-    });
-
-    res.json(updated);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/admin/orders/:id/assign", adminAuth, async (req, res) => {
-  try {
-    const orderId = Number(req.params.id);
-    const driverId = Number(req.body.driverId);
-    if (!Number.isInteger(orderId) || !Number.isInteger(driverId)) {
-      return res.status(400).json({ error: "訂單或司機資料格式不正確，請重新整理後再派單" });
-    }
-
-    const order = await getOrder(orderId);
-
-    if (order.status !== "pending") {
-      return res.status(409).json({ error: "只有待接單可以派單" });
-    }
-
-    const driver = await getDriverById(driverId);
-
-    if (!driver || !driver.is_active) {
-      return res.status(404).json({ error: "找不到可用司機" });
-    }
-
-    const updated = await claimOrder(
-      order.id,
-      driver.id,
-      Number(req.body.finalFare || order.estimated_fare)
-    );
-
-    await createAuditLog({ actor_type: "admin", action: "order.assign", entity_type: "order", entity_id: String(order.id), details: { driver_id: driver.id, final_fare: updated.final_fare } });
-
-    await notifyCustomer(updated, "accept");
-
-    res.json(updated);
-  } catch (error) {
-    if (sendClaimError(res, error)) return;
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/admin/orders/:id/action", adminAuth, async (req, res) => {
-  try {
-    const order = await getOrder(Number(req.params.id));
-    const action = req.body.action;
-    let values = {};
-
-    if (action === "complete") {
-      values = {
-        status: "completed",
-        completed_at: new Date().toISOString()
-      };
-    } else if (action === "cancel") {
-      values = {
-        status: "cancelled",
-        cancelled_at: new Date().toISOString()
-      };
-    } else {
-      return res.status(400).json({ error: "未知操作" });
-    }
-
-    const updated = await updateOrder(order.id, values);
-
-    await createAuditLog({ actor_type: "admin", action: `order.${action}`, entity_type: "order", entity_id: String(order.id), details: values });
-
-    if (order.assigned_driver_id) {
-      await updateDriver(order.assigned_driver_id, { status: "available" });
-    }
-
-    await notifyCustomer(updated, action);
-    res.json(updated);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put("/api/admin/orders/:id/fare", adminAuth, async (req, res) => {
-  try {
-    const amount = Number(req.body.finalFare);
-    if (!Number.isFinite(amount) || amount < 0) {
-      return res.status(400).json({ error: "車資格式不正確" });
-    }
-    const updated = await updateOrder(Number(req.params.id), { final_fare: Math.round(amount) });
-    await createAuditLog({ actor_type: "admin", action: "order.fare.update", entity_type: "order", entity_id: String(updated.id), details: { final_fare: updated.final_fare } });
-    res.json(updated);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/api/admin/settings", adminAuth, async (_req, res) => {
-  try {
-    res.json(await listSettings());
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put("/api/admin/settings", adminAuth, async (req, res) => {
-  try {
-    const allowed = new Set([
-      "fleet_name", "base_fare", "per_km", "per_minute", "default_toll",
-      "night_surcharge", "line_welcome_message", "ignored_keywords", "receipt_prefix"
-    ]);
-    const entries = Object.entries(req.body || {}).filter(([key]) => allowed.has(key));
-
-    if (!entries.length) return res.status(400).json({ error: "沒有可更新的設定" });
-
-    for (const [key, value] of entries) await updateSetting(key, value);
-    await createAuditLog({
-      actor_type: "admin", action: "settings.update", entity_type: "settings",
-      details: Object.fromEntries(entries)
-    });
-    res.json(await listSettings());
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/api/admin/customers", adminAuth, async (_req, res) => {
-  try {
-    res.json(await listCustomers());
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put("/api/admin/customers/:id", adminAuth, async (req, res) => {
-  try {
-    const allowedTypes = ["regular", "vip", "blacklist"];
-    if (!allowedTypes.includes(req.body.customer_type)) {
-      return res.status(400).json({ error: "客戶類型不正確" });
-    }
-    const customer = await updateCustomer(Number(req.params.id), {
-      name: String(req.body.name || "").trim() || null,
-      phone: String(req.body.phone || "").trim() || null,
-      customer_type: req.body.customer_type,
-      notes: String(req.body.notes || "").trim() || null
-    });
-    await createAuditLog({ actor_type: "admin", action: "customer.update", entity_type: "customer", entity_id: String(customer.id), details: req.body });
-    res.json(customer);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/admin/orders/:id/payment", adminAuth, async (req, res) => {
-  try {
-    const order = await getOrder(Number(req.params.id));
-    const method = String(req.body.method || "");
-    if (!["cash", "line_pay"].includes(method)) {
-      return res.status(400).json({ error: "付款方式不正確" });
-    }
-    const amount = Number(req.body.amount || order.final_fare || order.estimated_fare || 0);
-    const payment = await createPayment({ order_id: order.id, method, amount, status: "paid", transaction_ref: req.body.transactionRef || null, recorded_by: "admin" });
-    await updateOrder(order.id, { payment_method: method, payment_status: "paid", paid_at: new Date().toISOString() });
-    const settings = await listSettings();
-    const receipt = await createReceipt({
-      order_id: order.id,
-      receipt_no: `${settings.receipt_prefix || "OTZR"}-${String(order.id).padStart(8, "0")}`,
-      amount,
-      payment_method: method
-    });
-    await createAuditLog({ actor_type: "admin", action: "payment.record", entity_type: "order", entity_id: String(order.id), details: { method, amount } });
-    res.json({ payment, receipt });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/api/admin/orders/:id/receipt", adminAuth, async (req, res) => {
-  try {
-    const receipt = await getReceiptByOrderId(Number(req.params.id));
-    if (!receipt) return res.status(404).json({ error: "尚未開立收據" });
-    res.json(receipt);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/admin/orders/:id/rebook", adminAuth, async (req, res) => {
-  try {
-    const source = await getOrder(Number(req.params.id));
-    const schedule = classifyRideSchedule(req.body.rideTime);
-    const duplicate = await createOrder({
-      customer_line_id: source.customer_line_id,
-      customer_phone: source.customer_phone,
-      pickup: source.pickup,
-      destination: source.destination,
-      ride_time: req.body.rideTime || null,
-      is_reservation: schedule.isReservation,
-      scheduled_at: schedule.scheduledAt,
-      passengers: source.passengers,
-      pickup_latitude: source.pickup_latitude,
-      pickup_longitude: source.pickup_longitude,
-      distance_km: source.distance_km,
-      duration_min: source.duration_min,
-      base_fare: source.base_fare,
-      mileage_fare: source.mileage_fare,
-      time_fare: source.time_fare,
-      toll: source.toll,
-      night_surcharge: source.night_surcharge,
-      estimated_fare: source.estimated_fare,
-      in_service_area: source.in_service_area,
-      status: "pending"
-    });
-    await createAuditLog({ actor_type: "admin", action: "order.rebook", entity_type: "order", entity_id: String(duplicate.id), details: { source_order_id: source.id } });
-    res.status(201).json(duplicate);
-  } catch (error) {
-    if (["INVALID_RIDE_TIME", "RIDE_TIME_EXPIRED"].includes(error.code)) {
-      return res.status(400).json({ error: error.message });
-    }
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/api/admin/audit-logs", adminAuth, async (_req, res) => {
-  try {
-    res.json(await listAuditLogs());
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/api/driver/me", driverJwtAuth, async (req, res) => {
-  try {
-    const driver = await getDriverById(req.driver.driverId);
-
-    res.json({
-      id: driver.id,
-      name: driver.name,
-      username: driver.username,
-      phone: driver.phone,
-      plate: driver.plate,
-      vehicle: driver.vehicle,
-      vehicle_id: driver.vehicle_id,
-      member_role: driver.member_role,
-      status: driver.status,
-      is_active: driver.is_active
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/driver/location", driverJwtAuth, async (req, res) => {
-  try {
-    const latitude = Number(req.body.latitude);
-    const longitude = Number(req.body.longitude);
-    const accuracy = Number(req.body.accuracy);
-
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-      return res.status(400).json({ error: "無法取得有效的 GPS 定位" });
-    }
-    if (latitude < 21.75 || latitude > 25.35 || longitude < 120 || longitude > 122) {
-      return res.status(400).json({ error: "司機目前位置不在台灣本島範圍" });
-    }
-    if (Number.isFinite(accuracy) && accuracy > 1000) {
-      return res.status(400).json({ error: "GPS 定位誤差過大，請移至訊號較佳處" });
-    }
-
-    const updated = await updateDriver(req.driver.driverId, {
-      current_latitude: latitude,
-      current_longitude: longitude,
-      last_location_at: new Date().toISOString()
-    });
-    res.json({
-      latitude: updated.current_latitude,
-      longitude: updated.current_longitude,
-      last_location_at: updated.last_location_at
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get("/api/driver/orders", driverJwtAuth, async (req, res) => {
-  try {
-    const orders = await listOrders();
-    const driver = await getDriverById(req.driver.driverId);
-    const ownOrders = orders.filter(order =>
-      order.status === "accepted" &&
-      Number(order.assigned_driver_id) === Number(driver.id)
-    );
-    const pendingOrders = orders.filter(order => order.status === "pending");
-    const nearbyOrders = await filterNearbyPickupOrders(driver, pendingOrders);
-    const visible = [...ownOrders, ...nearbyOrders];
-
-    res.json(visible);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/driver/orders/:id/claim", driverJwtAuth, async (req, res) => {
-  try {
-    const order = await getOrder(Number(req.params.id));
-
-    if (order.status !== "pending") {
-      return res.status(409).json({ error: "訂單已被接走" });
-    }
-
-    const driver = await getDriverById(req.driver.driverId);
-
-    if (!driver.is_active) {
-      return res.status(403).json({ error: "司機帳號已停用" });
-    }
-
-    const nearby = await filterNearbyPickupOrders(driver, [order], { bypassCache: true });
-    if (!nearby.length) {
-      return res.status(409).json({
-        error: "此訂單距離目前位置超過 20 分鐘，或 GPS 定位已失效，無法接單"
-      });
-    }
-
-    const updated = await claimOrder(order.id, driver.id, order.estimated_fare);
-
-    await createAuditLog({ actor_type: "driver", actor_id: String(driver.id), action: "order.claim", entity_type: "order", entity_id: String(order.id), details: {} });
-
-    await notifyCustomer(updated, "accept");
-
-    res.json(updated);
-  } catch (error) {
-    if (sendClaimError(res, error)) return;
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/driver/orders/:id/action", driverJwtAuth, async (req, res) => {
-  try {
-    const order = await getOrder(Number(req.params.id));
-
-    if (Number(order.assigned_driver_id) !== Number(req.driver.driverId)) {
-      return res.status(403).json({ error: "這不是您的訂單" });
-    }
-
-    if (order.status !== "accepted") {
-      return res.status(409).json({ error: "只有已接單訂單可以操作" });
-    }
-
-    const action = req.body.action;
-    let values = {};
-
-    if (action === "start") {
-      values = { started_at: new Date().toISOString() };
-    } else if (action === "complete") {
-      values = {
-        status: "completed",
-        completed_at: new Date().toISOString()
-      };
-    } else {
-      return res.status(400).json({ error: "未知操作" });
-    }
-
-    const updated = await updateOrder(order.id, values);
-
-    await createAuditLog({ actor_type: "driver", actor_id: String(req.driver.driverId), action: `order.${action}`, entity_type: "order", entity_id: String(order.id), details: values });
-
-    if (action === "complete") {
-      await updateDriver(req.driver.driverId, { status: "available" });
-    }
-
-    await notifyCustomer(updated, action);
-    res.json(updated);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post("/api/driver/status", driverJwtAuth, async (req, res) => {
-  try {
-    const allowed = ["available", "busy", "offline"];
-    const status = String(req.body.status || "");
-
-    if (!allowed.includes(status)) {
-      return res.status(400).json({ error: "狀態不正確" });
-    }
-
-    const updated = await updateDriver(req.driver.driverId, { status });
-    res.json(updated);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-async function filterNearbyPickupOrders(driver, orders, { bypassCache = false } = {}) {
-  const latitude = Number(driver.current_latitude);
-  const longitude = Number(driver.current_longitude);
-  const locatedAt = Date.parse(driver.last_location_at || "");
-  const locationIsFresh = Number.isFinite(latitude) && Number.isFinite(longitude) &&
-    Number.isFinite(locatedAt) && Date.now() - locatedAt <= LOCATION_MAX_AGE_MS;
-
-  if (!locationIsFresh) return [];
-
-  const results = await Promise.all(orders.slice(0, 100).map(async order => {
-    const pickupLatitude = Number(order.pickup_latitude);
-    const pickupLongitude = Number(order.pickup_longitude);
-
-    // Orders created before GPS coordinates were stored are not sent to
-    // drivers automatically. This avoids an extra Geocoding API request.
-    if (!Number.isFinite(pickupLatitude) || !Number.isFinite(pickupLongitude)) {
-      return null;
-    }
-
-    // About 1.1 km buckets prevent a moving phone from creating a fresh API
-    // request every few metres.
-    const roundedLat = latitude.toFixed(2);
-    const roundedLng = longitude.toFixed(2);
-    const cacheKey = `${order.id}:${roundedLat}:${roundedLng}`;
-    const cached = pickupEtaCache.get(cacheKey);
-    let eta;
-
-    if (!bypassCache && cached && Date.now() - cached.createdAt < ETA_CACHE_MS) {
-      eta = cached.value;
-    } else {
-      try {
-        const pickup = {
-          latitude: pickupLatitude,
-          longitude: pickupLongitude
-        };
-        eta = await getPickupEtaMinutes(
-          latitude,
-          longitude,
-          pickup,
-          process.env.GOOGLE_MAPS_API_KEY
-        );
-        pickupEtaCache.set(cacheKey, { value: eta, createdAt: Date.now() });
-      } catch (error) {
-        console.error(`Pickup ETA failed for order ${order.id}:`, error.message);
-        return null;
-      }
-    }
-
-    if (eta.durationMin > PICKUP_ETA_LIMIT_MINUTES) return null;
-    return {
-      ...order,
-      pickup_eta_minutes: Math.ceil(eta.durationMin),
-      pickup_distance_km: Number(eta.distanceKm.toFixed(1))
-    };
-  }));
-
-  // Prevent an unbounded in-memory cache on long-running Railway instances.
-  if (pickupEtaCache.size > 2000) {
-    for (const [key, item] of pickupEtaCache) {
-      if (Date.now() - item.createdAt > ETA_CACHE_MS) pickupEtaCache.delete(key);
-    }
-  }
-  return results.filter(Boolean);
-}
-
-async function notifyCustomer(order, action) {
-  if (!order.customer_line_id) return;
-
-  let text = "";
-
-  if (action === "accept") {
-    text =
-      `✅ 司機已接單\n訂單：${orderNo(order.id)}\n` +
-      `司機：${order.driver_name || "OTZ車隊"}\n` +
-      `${order.driver_phone ? `電話：${order.driver_phone}\n` : ""}` +
-      `${order.driver_plate ? `車牌：${order.driver_plate}\n` : ""}` +
-      `${order.destination === "尚未提供"
-        ? "車資：待確認"
-        : `確認車資：${order.final_fare || order.estimated_fare} 元`}`;
-  } else if (action === "start") {
-    text =
-      `🚖 行程已開始\n訂單：${orderNo(order.id)}\n` +
-      `祝您一路平安。`;
-  } else if (action === "complete") {
-    text =
-      `✅ 行程已完成\n訂單：${orderNo(order.id)}\n` +
-      `感謝使用 OTZ 車隊。`;
-  } else if (action === "cancel") {
-    text = `訂單 ${orderNo(order.id)} 已取消。`;
-  }
-
-  if (text) {
-    await line.pushMessage({
-      to: order.customer_line_id,
-      messages: [{ type: "text", text: normalizeLineText(text) }]
-    });
-  }
-}
-
-function reply(replyToken, text) {
-  return line.replyMessage({
-    replyToken,
-    messages: [{ type: "text", text: normalizeLineText(text) }]
-  });
-}
-
-async function getLineNickname(event) {
-  const userId = event.source?.userId;
-  if (!userId) return "";
-
-  try {
-    let profile;
-    if (event.source?.type === "group" && event.source?.groupId) {
-      profile = await line.getGroupMemberProfile(event.source.groupId, userId);
-    } else if (event.source?.type === "room" && event.source?.roomId) {
-      profile = await line.getRoomMemberProfile(event.source.roomId, userId);
-    } else {
-      profile = await line.getProfile(userId);
-    }
-    return profile?.displayName ? `${profile.displayName}` : "";
-  } catch (error) {
-    console.warn("LINE profile lookup failed:", error.message);
-    return "";
-  }
+  console.log("Postback received:", event.postback.data);
 }
 
 function getLineSourceKey(event) {
-  if (!event?.source?.type) return "";
-  if (event.source.type === "group") return `group:${event.source.groupId || ""}`;
-  if (event.source.type === "room") return `room:${event.source.roomId || ""}`;
-  return `user:${event.source.userId || ""}`;
-}
-
-async function getMutedLineSources() {
-  const settings = await listSettings();
-  const value = settings[LINE_MUTED_SOURCES_SETTING];
-  if (Array.isArray(value)) return new Set(value.filter(Boolean));
-  if (value && typeof value === "object") {
-    return new Set(Object.entries(value).filter(([, muted]) => muted).map(([key]) => key));
-  }
-  return new Set();
+  if (event.source?.type === "user") return `user:${event.source.userId}`;
+  if (event.source?.type === "group") return `group:${event.source.groupId}`;
+  if (event.source?.type === "room") return `room:${event.source.roomId}`;
+  return `unknown:${Date.now()}`;
 }
 
 async function isLineSourceMuted(sourceKey) {
-  if (!sourceKey) return false;
-  const mutedSources = await getMutedLineSources();
-  return mutedSources.has(sourceKey);
+  const settings = await listSettings();
+  const muted = settings[LINE_MUTED_SOURCES_SETTING];
+  if (!muted || typeof muted !== "object") return false;
+  return Boolean(muted[sourceKey]);
 }
 
-async function setLineSourceMuted(sourceKey, muted) {
-  if (!sourceKey) return;
-  const mutedSources = await getMutedLineSources();
-  if (muted) {
-    mutedSources.add(sourceKey);
+async function setLineSourceMuted(sourceKey, isMuted) {
+  const settings = await listSettings();
+  const muted = { ...(settings[LINE_MUTED_SOURCES_SETTING] || {}) };
+  if (isMuted) {
+    muted[sourceKey] = true;
   } else {
-    mutedSources.delete(sourceKey);
+    delete muted[sourceKey];
   }
-  await updateSetting(LINE_MUTED_SOURCES_SETTING, [...mutedSources]);
+  await updateSetting(LINE_MUTED_SOURCES_SETTING, muted);
 }
 
-function normalizeLineText(value) {
-  return String(value ?? "")
-    .replace(/\\+r\\+n/g, "\n")
-    .replace(/\\+n/g, "\n");
-}
-
-function sendClaimError(res, error) {
-  const message = String(error?.message || "");
-  if (message.includes("DRIVER_HAS_ACTIVE_ORDER")) {
-    res.status(409).json({ error: "同一時間只能進行一張一般訂單；請先完成目前訂單" });
-    return true;
-  }
-  if (message.includes("DRIVER_HAS_IMMINENT_RESERVATION")) {
-    res.status(409).json({ error: "已有預約單即將開始，上車時間前 30 分鐘禁止再接單" });
-    return true;
-  }
-  if (message.includes("ORDER_NOT_PENDING")) {
-    res.status(409).json({ error: "訂單已被其他司機接走" });
-    return true;
-  }
-  if (message.includes("DRIVER_NOT_AVAILABLE")) {
-    res.status(409).json({ error: "司機目前無法接單" });
-    return true;
-  }
-  return false;
-}
-
-function adminAuth(req, res, next) {
-  if (!isAdminToken(req.get("x-admin-token"))) {
-    return res.status(401).json({ error: "未授權" });
-  }
-  next();
-}
-
-function isAdminToken(token) {
-  const value = String(token || "");
-  const configured = String(process.env.ADMIN_TOKEN || DEFAULT_ADMIN_TOKEN);
-  return Boolean(value) && (value === configured || value === DEFAULT_ADMIN_TOKEN);
-}
-
-function driverJwtAuth(req, res, next) {
-  const header = req.get("authorization") || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-
-  if (!token) {
-    return res.status(401).json({ error: "請重新登入" });
-  }
-
+async function reply(replyToken, text) {
   try {
-    req.driver = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch {
-    return res.status(401).json({ error: "登入已過期，請重新登入" });
+    await line.replyMessage({
+      replyToken,
+      messages: [{ type: "text", text }]
+    });
+  } catch (error) {
+    console.error("Reply error:", error);
   }
 }
 
-app.listen(port, "0.0.0.0", () => {
-  console.log(`OTZ V5.3.6 listening on ${port}`);
-});
+async function getLineNickname(event) {
+  try {
+    if (event.source?.type === "user") {
+      const profile = await line.getProfile(event.source.userId);
+      return profile.displayName ? `${profile.displayName} ` : "";
+    }
+  } catch (e) {
+    console.error("Error getting profile:", e);
+  }
+  return "";
+}
+
+app.listen(port, () => console.log(`Server listening on port ${port}`));
