@@ -9,7 +9,7 @@ import {
 } from "./parser.js";
 import { getRoute, getPickupEtaMinutes, validatePickupLocation } from "./maps.js";
 import { calculateDonggangTownFare, calculateFare, isDonggangTownTrip } from "./fare.js";
-import { quoteFlex, pickupOnlyFlex, orderNo } from "./messages.js";
+import { quoteFlex, orderNo } from "./messages.js";
 import {
   createOrder, listOrders, getOrder, updateOrder, claimOrder,
   listDrivers, createDriver, updateDriver,
@@ -225,39 +225,10 @@ async function handleText(event) {
   }
 
   try {
-    const schedule = classifyRideSchedule(parsed.rideTime);
     if (!parsed.destination) {
-      // 沒有目的地時只驗證上車點，不呼叫 Routes API 或試算車資。
-      const pickupResult = await validatePickupLocation(
-        parsed.pickup,
-        process.env.GOOGLE_MAPS_API_KEY
-      );
-      const order = await createOrder({
-        customer_line_id: event.source?.userId || null,
-        pickup: parsed.pickup,
-        destination: "尚未提供",
-        ride_time: parsed.rideTime || null,
-        is_reservation: schedule.isReservation,
-        scheduled_at: schedule.scheduledAt,
-        passengers: parsed.passengers,
-        pickup_latitude: pickupResult.location?.latitude ?? null,
-        pickup_longitude: pickupResult.location?.longitude ?? null,
-        distance_km: 0,
-        duration_min: 0,
-        base_fare: 0,
-        mileage_fare: 0,
-        time_fare: 0,
-        toll: 0,
-        night_surcharge: 0,
-        estimated_fare: 0,
-        in_service_area: true,
-        status: "pending"
-      });
-      return line.replyMessage({
-        replyToken: event.replyToken,
-        messages: [pickupOnlyFlex(order)]
-      });
+      return reply(event.replyToken, "請同時提供上車地點與下車地點，資料完整後才會建立訂單。");
     }
+    const schedule = classifyRideSchedule(parsed.rideTime);
     const route = await getRoute(
       parsed.pickup,
       parsed.destination,
