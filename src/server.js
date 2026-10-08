@@ -1246,15 +1246,7 @@ function getLineMessageBody(event) {
 }
 
 function formatCapturedLineMessage(values) {
-  const template = String(process.env.LINE_CAPTURE_FORWARD_TEMPLATE || "").trim();
-  const fallback =
-    "📩 指定聊天窗口訊息\n" +
-    "名稱：{nickname}\n" +
-    "來源：{sourceType}\n" +
-    "類型：{messageType}\n" +
-    "時間：{time}\n" +
-    "內容：{body}";
-  return (template || fallback).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? "");
+  return String(values.body ?? "");
 }
 
 function getLineSourceKey(event) {
