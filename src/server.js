@@ -34,6 +34,8 @@ const realtimeClients = new Set();
 const pickupEtaCache = new Map();
 const humanHandoffTimers = new Map();
 const dailyFareQuoteIntents = new Map();
+const dispatchGroupPushedOrderIds = new Set();
+let dispatchGroupScanRunning = false;
 const DEFAULT_ADMIN_TOKEN = "0908160150";
 const LINE_MUTED_SOURCES_SETTING = "muted_line_sources";
 const HUMAN_HANDOFF_AUTO_RESUME_MS = 3 * 60 * 1000;
@@ -48,11 +50,18 @@ const BOT_RESUME_KEYWORDS = new Set([
 const PICKUP_ETA_LIMIT_MINUTES = 20;
 const LOCATION_MAX_AGE_MS = 2 * 60 * 1000;
 const ETA_CACHE_MS = 5 * 60 * 1000;
+const DISPATCH_GROUP_SCAN_MS = 30 * 1000;
 
 subscribeToFleetChanges(event => {
   const message = `data: ${JSON.stringify(event)}\n\n`;
   for (const client of realtimeClients) client.write(message);
+  if (event.table === "orders" && event.new?.status === "pending") {
+    queueDispatchGroupScan();
+  }
 });
+
+setInterval(queueDispatchGroupScan, DISPATCH_GROUP_SCAN_MS);
+setTimeout(queueDispatchGroupScan, 5000);
 
 app.get("/", (_req, res) => res.send("OTZ V5.3.6 is running"));
 app.get("/health", async (_req, res) => {
@@ -285,6 +294,7 @@ async function handleText(event) {
         logLinePushError("Direct order dispatch group push failed", error);
         return false;
       });
+      if (dispatched) markOrderDispatchedToGroup(order, { auto: false, source: "direct" });
 
       return reply(
         event.replyToken,
@@ -421,6 +431,7 @@ async function handlePostback(event) {
         logLinePushError("Confirmed order dispatch group push failed", error);
         return false;
       });
+      if (dispatched) markOrderDispatchedToGroup(updatedOrder, { auto: false, source: "confirm" });
 
       return reply(
         event.replyToken,
@@ -1458,6 +1469,58 @@ async function pushOrderToDispatchGroup(order) {
   });
   console.log(`Order ${orderNo(order.id)} pushed to dispatch group ${groupId}`);
   return true;
+}
+
+function queueDispatchGroupScan() {
+  if (dispatchGroupScanRunning) return;
+  dispatchGroupScanRunning = true;
+  setTimeout(() => {
+    autoDispatchPendingOrders().finally(() => {
+      dispatchGroupScanRunning = false;
+    });
+  }, 500);
+}
+
+async function autoDispatchPendingOrders() {
+  try {
+    const [orders, auditLogs] = await Promise.all([listOrders(), listAuditLogs()]);
+    const alreadyLogged = new Set(
+      auditLogs
+        .filter(log => log.action === "order.dispatch_group" && log.entity_type === "order")
+        .map(log => String(log.entity_id))
+    );
+    const pendingOrders = orders.filter(order => order.status === "pending");
+
+    for (const order of pendingOrders) {
+      const orderId = String(order.id);
+      if (dispatchGroupPushedOrderIds.has(orderId) || alreadyLogged.has(orderId)) continue;
+
+      const pushed = await pushOrderToDispatchGroup(order).catch(error => {
+        logLinePushError(`Auto dispatch order ${orderNo(order.id)} failed`, error);
+        return false;
+      });
+      if (!pushed) continue;
+
+      markOrderDispatchedToGroup(order, { auto: true, source: "scanner" });
+    }
+  } catch (error) {
+    logLinePushError("Auto dispatch pending orders failed", error);
+  }
+}
+
+function markOrderDispatchedToGroup(order, details = {}) {
+  if (!order?.id) return;
+  const orderId = String(order.id);
+  dispatchGroupPushedOrderIds.add(orderId);
+  createAuditLog({
+    actor_type: "system",
+    action: "order.dispatch_group",
+    entity_type: "order",
+    entity_id: orderId,
+    details: { group_id: getDispatchGroupId(), ...details }
+  }).catch(error => {
+    console.error("Dispatch group audit log failed:", error);
+  });
 }
 
 function logLinePushError(label, error) {
