@@ -29,6 +29,7 @@ const port = Number(process.env.PORT || 8080);
 const line = new messagingApi.MessagingApiClient({
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN
 });
+let dispatchTokenCursor = 0;
 
 const realtimeClients = new Set();
 const pickupEtaCache = new Map();
@@ -891,11 +892,8 @@ app.post("/api/admin/line/dispatch-test", adminAuth, async (req, res) => {
   const text = normalizeLineText(req.body.text || "OTZ 派單群組測試\n60/20/2\n上車地點:測試\n下車地點:測試");
 
   try {
-    await line.pushMessage({
-      to: groupId,
-      messages: [{ type: "text", text }]
-    });
-    res.json({ ok: true, groupId });
+    const result = await pushDispatchLineMessage(groupId, text);
+    res.json({ ok: true, groupId, account: result.name });
   } catch (error) {
     const details = getLinePushErrorDetails(error);
     console.error("Dispatch group test push failed:", details);
@@ -1461,21 +1459,59 @@ async function pushOrderToDispatchGroup(order) {
   const groupId = getDispatchGroupId();
   if (!groupId || !order) return false;
 
-  await line.pushMessage({
-    to: groupId,
-    messages: [{
-      type: "text",
-      text: normalizeLineText(formatRideRequestTemplate({
-        pickup: order.pickup,
-        destination: order.destination,
-        passengers: order.passengers ? `${order.passengers}` : "",
-        luggage: "",
-        specialNeeds: ""
-      }))
-    }]
-  });
-  console.log(`Order ${orderNo(order.id)} pushed to dispatch group ${groupId}`);
+  const text = normalizeLineText(formatRideRequestTemplate({
+    pickup: order.pickup,
+    destination: order.destination,
+    passengers: order.passengers ? `${order.passengers}` : "",
+    luggage: "",
+    specialNeeds: ""
+  }));
+  const result = await pushDispatchLineMessage(groupId, text);
+  console.log(`Order ${orderNo(order.id)} pushed to dispatch group ${groupId} by ${result.name}`);
   return true;
+}
+
+async function pushDispatchLineMessage(groupId, text) {
+  const accounts = getDispatchLineAccounts();
+  const errors = [];
+
+  for (let attempt = 0; attempt < accounts.length; attempt += 1) {
+    const index = (dispatchTokenCursor + attempt) % accounts.length;
+    const account = accounts[index];
+
+    try {
+      await account.client.pushMessage({
+        to: groupId,
+        messages: [{ type: "text", text }]
+      });
+      dispatchTokenCursor = (index + 1) % accounts.length;
+      return { name: account.name, index };
+    } catch (error) {
+      const details = getLinePushErrorDetails(error);
+      errors.push({ account: account.name, ...details });
+      console.error(`Dispatch push failed by ${account.name}:`, details);
+    }
+  }
+
+  const error = new Error("All LINE dispatch accounts failed");
+  error.dispatchErrors = errors;
+  throw error;
+}
+
+function getDispatchLineAccounts() {
+  const tokens = String(process.env.LINE_DISPATCH_TOKENS || "")
+    .split(/[,\n\r]+/u)
+    .map(token => token.trim())
+    .filter(Boolean);
+
+  if (!tokens.length && process.env.LINE_CHANNEL_ACCESS_TOKEN) {
+    tokens.push(process.env.LINE_CHANNEL_ACCESS_TOKEN);
+  }
+
+  return tokens.map((token, index) => ({
+    name: `dispatch-${index + 1}`,
+    client: new messagingApi.MessagingApiClient({ channelAccessToken: token })
+  }));
 }
 
 function logLinePushError(label, error) {
@@ -1486,7 +1522,8 @@ function getLinePushErrorDetails(error) {
   return {
     message: error?.message,
     status: error?.statusCode || error?.status,
-    body: error?.body || error?.response?.data || error?.originalError?.response?.data || null
+    body: error?.body || error?.response?.data || error?.originalError?.response?.data || null,
+    dispatchErrors: error?.dispatchErrors || null
   };
 }
 
