@@ -386,43 +386,42 @@ function getTaipeiDateKey() {
 }
 
 async function handlePostback(event) {
-  const params = new URLSearchParams(event.postback.data);
-  const action = params.get("action");
-  const id = Number(params.get("id"));
-  const order = await getOrder(id);
-
-  if (action === "confirm") {
-    if (!order) {
-      return reply(event.replyToken, "找不到這筆訂單，請重新試算或聯絡客服。");
+  try {
+    const params = new URLSearchParams(event.postback?.data || "");
+    const action = params.get("action");
+    const id = Number(params.get("id"));
+    if (!Number.isInteger(id) || id <= 0) {
+      return reply(event.replyToken, "訂單資料異常，請重新試算或聯絡客服。");
     }
-    if (order.status !== "awaiting_customer") {
-      return reply(event.replyToken, "這筆訂單已處理。");
+    const order = await getOrder(id);
+
+    if (action === "confirm") {
+      if (order.status !== "awaiting_customer") {
+        return reply(event.replyToken, "這筆訂單已處理。");
+      }
+
+      await updateOrder(id, { status: "pending" });
+      pushConfirmedOrderToDispatchGroup(order).catch(error => {
+        console.error("Confirmed order dispatch group push failed:", error);
+      });
+
+      return reply(
+        event.replyToken,
+        `✅ 叫車已確認\n訂單：${orderNo(id)}\n為您尋找司機 請稍等 有車訊會馬上通知您`
+      );
     }
 
-    await updateOrder(id, { status: "pending" });
-    const dispatched = await pushConfirmedOrderToDispatchGroup(order).catch(error => {
-      console.error("Confirmed order dispatch group push failed:", error);
-      return false;
-    });
+    if (action === "cancel") {
+      await updateOrder(id, {
+        status: "cancelled",
+        cancelled_at: new Date().toISOString()
+      });
 
-    return reply(
-      event.replyToken,
-      dispatched
-        ? `✅ 叫車已確認\n訂單：${orderNo(id)}\n為您尋找司機 請稍等 有車訊會馬上通知您`
-        : `✅ 叫車已確認\n訂單：${orderNo(id)}\n⚠️ 群組派單失敗，已通知系統記錄，請聯絡客服。`
-    );
-  }
-
-  if (action === "cancel") {
-    if (!order) {
-      return reply(event.replyToken, "找不到這筆訂單，請重新試算或聯絡客服。");
+      return reply(event.replyToken, `已取消訂單 ${orderNo(id)}。`);
     }
-    await updateOrder(id, {
-      status: "cancelled",
-      cancelled_at: new Date().toISOString()
-    });
-
-    return reply(event.replyToken, `已取消訂單 ${orderNo(id)}。`);
+  } catch (error) {
+    console.error("Postback handling failed:", error);
+    return reply(event.replyToken, "叫車確認失敗，請重新試算或聯絡客服。");
   }
 }
 
