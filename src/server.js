@@ -91,6 +91,7 @@ app.post("/webhook", middleware({ channelSecret: process.env.LINE_CHANNEL_SECRET
 
 async function handleLineEvent(event) {
   const sourceKey = getLineSourceKey(event);
+  await forwardAllowedWindowMessage(event);
 
   if (isManualChatMessageEvent(event)) {
     await startHumanHandoff(sourceKey, "manual-chat-message");
@@ -1185,6 +1186,60 @@ async function getLineNickname(event) {
     console.warn("LINE profile lookup failed:", error.message);
     return "";
   }
+}
+
+async function forwardAllowedWindowMessage(event) {
+  const groupId = String(process.env.LINE_CAPTURE_FORWARD_GROUP_ID || "").trim();
+  if (!groupId || event?.type !== "message") return;
+
+  const allowedName = String(process.env.LINE_CAPTURE_ALLOWED_NAME || "輝”>Σ").trim();
+  const nickname = await getLineNickname(event);
+  if (nickname !== allowedName) {
+    console.log(`Skipped LINE capture from window: ${nickname || "unknown"}`);
+    return;
+  }
+
+  try {
+    await line.pushMessage({
+      to: groupId,
+      messages: [{
+        type: "text",
+        text: normalizeLineText(formatCapturedLineMessage({
+          nickname,
+          sourceType: event.source?.type || "unknown",
+          messageType: event.message?.type || event.type,
+          body: getLineMessageBody(event),
+          time: new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" })
+        }))
+      }]
+    });
+  } catch (error) {
+    console.error("Allowed window capture forward failed:", error);
+  }
+}
+
+function getLineMessageBody(event) {
+  const message = event?.message || {};
+  if (message.type === "text") return message.text || "";
+  if (message.type === "sticker") return `貼圖 package=${message.packageId || ""} sticker=${message.stickerId || ""}`;
+  if (message.type === "image") return "圖片";
+  if (message.type === "video") return "影片";
+  if (message.type === "audio") return "語音";
+  if (message.type === "file") return `檔案 ${message.fileName || ""}`.trim();
+  if (message.type === "location") return `位置 ${message.title || ""} ${message.address || ""}`.trim();
+  return message.type || "未知訊息";
+}
+
+function formatCapturedLineMessage(values) {
+  const template = String(process.env.LINE_CAPTURE_FORWARD_TEMPLATE || "").trim();
+  const fallback =
+    "📩 指定聊天窗口訊息\n" +
+    "名稱：{nickname}\n" +
+    "來源：{sourceType}\n" +
+    "類型：{messageType}\n" +
+    "時間：{time}\n" +
+    "內容：{body}";
+  return (template || fallback).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? "");
 }
 
 function getLineSourceKey(event) {
