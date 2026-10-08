@@ -279,7 +279,7 @@ async function handleText(event) {
     if (!isFareQuoteRequest) {
       return reply(
         event.replyToken,
-        `✅ 已建立叫車單\n訂單：${orderNo(order.id)}\n上車：${parsed.pickup}\n下車：${parsed.destination}\n等待派單。`
+        `✅ 已建立叫車單\n訂單：${orderNo(order.id)}\n上車：${parsed.pickup}\n下車：${parsed.destination}\n為您尋找司機 請稍等 有車訊會馬上通知您`
       );
     }
 
