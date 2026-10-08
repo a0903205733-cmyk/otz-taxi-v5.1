@@ -394,13 +394,16 @@ async function handlePostback(event) {
     }
 
     await updateOrder(id, { status: "pending" });
-    pushConfirmedOrderToDispatchGroup(order).catch(error => {
+    const dispatched = await pushConfirmedOrderToDispatchGroup(order).catch(error => {
       console.error("Confirmed order dispatch group push failed:", error);
+      return false;
     });
 
     return reply(
       event.replyToken,
-      `✅ 叫車已確認\n訂單：${orderNo(id)}\n為您尋找司機 請稍等 有車訊會馬上通知您`
+      dispatched
+        ? `✅ 叫車已確認\n訂單：${orderNo(id)}\n為您尋找司機 請稍等 有車訊會馬上通知您`
+        : `✅ 叫車已確認\n訂單：${orderNo(id)}\n⚠️ 群組派單失敗，已通知系統記錄，請聯絡客服。`
     );
   }
 
@@ -1412,8 +1415,8 @@ function formatCapturedLineMessage(values) {
 }
 
 async function pushConfirmedOrderToDispatchGroup(order) {
-  const groupId = String(process.env.LINE_CAPTURE_FORWARD_GROUP_ID || "Cddc86808ba9af00baf20e85a8029b379").trim();
-  if (!groupId || !order) return;
+  const groupId = getDispatchGroupId();
+  if (!groupId || !order) return false;
 
   await line.pushMessage({
     to: groupId,
@@ -1428,6 +1431,16 @@ async function pushConfirmedOrderToDispatchGroup(order) {
       }))
     }]
   });
+  console.log(`Confirmed order ${orderNo(order.id)} pushed to dispatch group ${groupId}`);
+  return true;
+}
+
+function getDispatchGroupId() {
+  return String(
+    process.env.LINE_DISPATCH_GROUP_ID ||
+      process.env.LINE_CAPTURE_FORWARD_GROUP_ID ||
+      "Cddc86808ba9af00baf20e85a8029b379"
+  ).trim();
 }
 
 function formatRideRequestTemplate(values) {
