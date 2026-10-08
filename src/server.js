@@ -1203,7 +1203,7 @@ async function getLineNickname(event) {
 }
 
 async function forwardAllowedWindowMessage(event) {
-  const groupId = String(process.env.LINE_CAPTURE_FORWARD_GROUP_ID || "C0786064d1ba7a5a64add22fc27752ba7").trim();
+  const groupId = String(process.env.LINE_CAPTURE_FORWARD_GROUP_ID || "Cddc86808ba9af00baf20e85a8029b379").trim();
   if (!groupId || event?.type !== "message") return;
 
   const allowedName = String(process.env.LINE_CAPTURE_ALLOWED_NAME || "輝”>Σ").trim();
