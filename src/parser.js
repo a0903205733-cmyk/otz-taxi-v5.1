@@ -1,6 +1,7 @@
 const CHINESE_DIGITS = { 零: 0, 〇: 0, 一: 1, 二: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
 
 export function parseRideRequest(text) {
+  const formRoute = extractLabeledRideForm(text);
   const normalized = String(text || "")
     .replace(/[，、；]/g, ",")
     .replace(/[→➡➜]/g, "到")
@@ -10,6 +11,15 @@ export function parseRideRequest(text) {
 
   const rideTime = extractRideTime(normalized);
   const passengers = extractPassengerCount(normalized);
+  if (formRoute.pickup || formRoute.destination) {
+    return {
+      pickup: formRoute.pickup,
+      destination: formRoute.destination,
+      passengers,
+      rideTime
+    };
+  }
+
   let routeText = normalized;
   if (rideTime) routeText = routeText.replace(rideTime, " ");
   routeText = removePassengerText(routeText)
@@ -172,6 +182,25 @@ function cleanPlace(value) {
     .replace(/^(?:到|至|前往|下車(?:地點)?)[：:\s]*/u, "")
     .replace(/^[,\/;:：\s]+|[,\/;:：\s]+$/g, "")
     .trim();
+}
+
+function extractLabeledRideForm(value) {
+  const lines = String(value || "").split(/\r?\n/u);
+  const pickup = lines
+    .map(line => line.match(/上車(?:地點|地址)?(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u)?.[1])
+    .find(text => String(text || "").trim());
+  const destination = lines
+    .map(line => line.match(/(?:下車(?:地點|地址)?|目的地)(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u)?.[1])
+    .find(text => String(text || "").trim());
+
+  return {
+    pickup: cleanFormPlace(pickup, /(?:下車(?:地點|地址)?|目的地|人數|行李|特殊需求)(?:（[^）]*）|\([^)]*\))?\s*[：:]/u),
+    destination: cleanFormPlace(destination, /(?:人數|行李|特殊需求)(?:（[^）]*）|\([^)]*\))?\s*[：:]/u)
+  };
+}
+
+function cleanFormPlace(value, stopPattern) {
+  return cleanPlace(String(value || "").split(stopPattern)[0]);
 }
 
 function extractPassengerCount(text) {
