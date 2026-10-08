@@ -46,8 +46,6 @@
    - `SUPABASE_SECRET_KEY`
    - `JWT_SECRET`
    - `ADMIN_TOKEN`
-   - `LINE_PICKUP_FORWARD_GROUP_ID`（可選，設定後會把客人上車地點轉發到指定 LINE 群組）
-   - `LINE_PICKUP_FORWARD_TEMPLATE`（可選，可用 `{nickname}`、`{pickup}`、`{pickupAddress}`、`{destination}`、`{passengers}`、`{rideTime}`、`{sourceType}`、`{originalText}`）
    - `PORT=8080`
 
 3. 將本專案完整上傳到 GitHub 根目錄，等待 Railway 自動部署。
