@@ -391,6 +391,7 @@ async function handlePostback(event) {
     }
 
     await updateOrder(id, { status: "pending" });
+    await pushConfirmedOrderToDispatchGroup(order);
 
     return reply(
       event.replyToken,
@@ -1400,6 +1401,25 @@ function looksLikeCapturedAddress(value) {
 
 function formatCapturedLineMessage(values) {
   return formatRideRequestTemplate(values);
+}
+
+async function pushConfirmedOrderToDispatchGroup(order) {
+  const groupId = String(process.env.LINE_CAPTURE_FORWARD_GROUP_ID || "Cddc86808ba9af00baf20e85a8029b379").trim();
+  if (!groupId || !order) return;
+
+  await line.pushMessage({
+    to: groupId,
+    messages: [{
+      type: "text",
+      text: normalizeLineText(formatRideRequestTemplate({
+        pickup: order.pickup,
+        destination: order.destination,
+        passengers: order.passengers ? `${order.passengers}` : "",
+        luggage: "",
+        specialNeeds: ""
+      }))
+    }]
+  });
 }
 
 function formatRideRequestTemplate(values) {
