@@ -33,6 +33,7 @@ const line = new messagingApi.MessagingApiClient({
 const realtimeClients = new Set();
 const pickupEtaCache = new Map();
 const humanHandoffTimers = new Map();
+const dailyFareQuoteIntents = new Map();
 const DEFAULT_ADMIN_TOKEN = "0908160150";
 const LINE_MUTED_SOURCES_SETTING = "muted_line_sources";
 const HUMAN_HANDOFF_AUTO_RESUME_MS = 3 * 60 * 1000;
@@ -145,7 +146,8 @@ async function handleLineEvent(event) {
 
 async function handleText(event) {
   const incomingText = String(event.message.text || "").trim();
-  if (incomingText === "我要試算車資") {
+  if (isFareQuoteKeyword(incomingText)) {
+    rememberFareQuoteIntent(event);
     return reply(event.replyToken, "請問上下車地點");
   }
   if (incomingText === "我想叫車") {
@@ -169,10 +171,11 @@ async function handleText(event) {
     );
   }
   const isGroupChat = ["group", "room"].includes(event.source?.type);
-  const isFareQuoteRequest = /^我要試算車資(?:[，,、:：\s]|$)/u.test(incomingText);
+  const isFareQuoteRequest = isFareQuoteInlineRequest(incomingText) || hasFareQuoteIntentToday(event);
+  if (isFareQuoteInlineRequest(incomingText)) rememberFareQuoteIntent(event);
   const rideText = incomingText
     .replace(/^我要叫車[，,、:：\s]*/u, "")
-    .replace(/^我要試算車資[，,、:：\s]*/u, "");
+    .replace(/^我(?:想要|要)試算車資[，,、:：\s]*/u, "");
   const parsed = parseRideRequest(rideText);
 
   // 私訊與群組使用相同的介入條件。普通聊天在讀取客戶資料與呼叫
@@ -303,11 +306,13 @@ async function handleText(event) {
 
 async function handleMutedText(event) {
   const incomingText = String(event.message.text || "").trim();
-  if (incomingText === "我要試算車資") {
+  if (isFareQuoteKeyword(incomingText)) {
+    rememberFareQuoteIntent(event);
     return reply(event.replyToken, "請問上下車地點");
   }
 
-  const quoteText = incomingText.replace(/^我要試算車資[，,、:：\s]*/u, "");
+  if (isFareQuoteInlineRequest(incomingText)) rememberFareQuoteIntent(event);
+  const quoteText = incomingText.replace(/^我(?:想要|要)試算車資[，,、:：\s]*/u, "");
   const parsed = parseRideRequest(quoteText);
   if (!parsed.pickup || !parsed.destination || !isGroupRideRequest(quoteText, parsed)) {
     console.log("Muted LINE source ignored non-quote message");
@@ -340,6 +345,38 @@ async function handleMutedText(event) {
     console.error("Muted quote error:", error);
     return;
   }
+}
+
+function isFareQuoteKeyword(text) {
+  return /^我(?:想要|要)試算車資$/u.test(String(text || "").trim());
+}
+
+function isFareQuoteInlineRequest(text) {
+  return /^我(?:想要|要)試算車資(?:[，,、:：\s]|$)/u.test(String(text || "").trim());
+}
+
+function rememberFareQuoteIntent(event) {
+  const key = getDailyFareQuoteIntentKey(event);
+  if (!key) return;
+  const today = getTaipeiDateKey();
+  for (const storedKey of dailyFareQuoteIntents.keys()) {
+    if (!storedKey.startsWith(`${today}:`)) dailyFareQuoteIntents.delete(storedKey);
+  }
+  dailyFareQuoteIntents.set(key, Date.now());
+}
+
+function hasFareQuoteIntentToday(event) {
+  const key = getDailyFareQuoteIntentKey(event);
+  return key ? dailyFareQuoteIntents.has(key) : false;
+}
+
+function getDailyFareQuoteIntentKey(event) {
+  const sourceKey = getLineSourceKey(event);
+  return sourceKey ? `${getTaipeiDateKey()}:${sourceKey}` : "";
+}
+
+function getTaipeiDateKey() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Taipei" });
 }
 
 async function handlePostback(event) {
