@@ -1216,7 +1216,8 @@ async function forwardAllowedWindowMessage(event) {
 
   try {
     const body = getLineMessageBody(event);
-    if (!(await shouldForwardCapturedLineBody(event, body))) {
+    const capturedRoute = await getValidatedCapturedRoute(event, body);
+    if (!capturedRoute) {
       console.log(`Skipped LINE capture without valid address: ${body}`);
       return;
     }
@@ -1230,6 +1231,8 @@ async function forwardAllowedWindowMessage(event) {
           sourceType: event.source?.type || "unknown",
           messageType: event.message?.type || event.type,
           body,
+          pickup: capturedRoute.pickup,
+          destination: capturedRoute.destination,
           time: new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" })
         }))
       }]
@@ -1251,36 +1254,58 @@ function getLineMessageBody(event) {
   return message.type || "未知訊息";
 }
 
-async function shouldForwardCapturedLineBody(event, body) {
-  const candidate = extractCapturedAddressCandidate(event, body);
-  if (!candidate || !process.env.GOOGLE_MAPS_API_KEY) return false;
+async function getValidatedCapturedRoute(event, body) {
+  const route = extractCapturedRoute(event, body);
+  if (!route.pickup || !process.env.GOOGLE_MAPS_API_KEY) return null;
 
   try {
-    await validatePickupLocation(candidate, process.env.GOOGLE_MAPS_API_KEY);
-    return true;
+    await validatePickupLocation(route.pickup, process.env.GOOGLE_MAPS_API_KEY);
+    if (route.destination) {
+      await validatePickupLocation(route.destination, process.env.GOOGLE_MAPS_API_KEY);
+    }
+    return route;
   } catch (error) {
-    console.log(`Skipped LINE capture invalid address "${candidate}": ${error.message}`);
-    return false;
+    console.log(`Skipped LINE capture invalid address "${route.pickup}": ${error.message}`);
+    return null;
   }
 }
 
-function extractCapturedAddressCandidate(event, body) {
+function extractCapturedRoute(event, body) {
   const message = event?.message || {};
   if (message.type === "location") {
-    return cleanCapturedAddress(message.address || message.title || "");
+    return {
+      pickup: cleanCapturedAddress(message.address || message.title || ""),
+      destination: ""
+    };
   }
-  if (message.type !== "text") return "";
+  if (message.type !== "text") return { pickup: "", destination: "" };
 
   const text = String(body || "").trim();
-  const lineCandidate = text
-    .split(/\r?\n/u)
+  const lines = text.split(/\r?\n/u);
+  const pickupLine = lines
     .map(line => line.match(/(?:上車(?:地點|地址)?|地址)(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.+)$/u)?.[1])
     .find(Boolean);
-  if (lineCandidate) return cleanCapturedAddress(lineCandidate);
+  const destinationLine = lines
+    .map(line => line.match(/(?:下車(?:地點|地址)?|目的地)(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.+)$/u)?.[1])
+    .find(Boolean);
+  if (pickupLine || destinationLine) {
+    return {
+      pickup: cleanCapturedAddress(pickupLine || ""),
+      destination: cleanCapturedAddress(destinationLine || "")
+    };
+  }
 
   const parsed = parseRideRequest(text);
-  if (isGroupRideRequest(text, parsed)) return cleanCapturedAddress(parsed.pickup);
-  return looksLikeCapturedAddress(parsed.pickup) ? cleanCapturedAddress(parsed.pickup) : "";
+  if (isGroupRideRequest(text, parsed)) {
+    return {
+      pickup: cleanCapturedAddress(parsed.pickup),
+      destination: cleanCapturedAddress(parsed.destination)
+    };
+  }
+  return {
+    pickup: looksLikeCapturedAddress(parsed.pickup) ? cleanCapturedAddress(parsed.pickup) : "",
+    destination: ""
+  };
 }
 
 function cleanCapturedAddress(value) {
@@ -1297,7 +1322,11 @@ function looksLikeCapturedAddress(value) {
 }
 
 function formatCapturedLineMessage(values) {
-  return String(values.body ?? "");
+  return [
+    "60/20/2",
+    `上車地點:${values.pickup || ""}`,
+    `下車地點:${values.destination || ""}`
+  ].join("\n");
 }
 
 function getLineSourceKey(event) {
