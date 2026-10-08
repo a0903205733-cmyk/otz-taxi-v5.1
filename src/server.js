@@ -886,6 +886,23 @@ app.put("/api/admin/settings", adminAuth, async (req, res) => {
   }
 });
 
+app.post("/api/admin/line/dispatch-test", adminAuth, async (req, res) => {
+  const groupId = String(req.body.groupId || getDispatchGroupId()).trim();
+  const text = normalizeLineText(req.body.text || "OTZ 派單群組測試\n60/20/2\n上車地點:測試\n下車地點:測試");
+
+  try {
+    await line.pushMessage({
+      to: groupId,
+      messages: [{ type: "text", text }]
+    });
+    res.json({ ok: true, groupId });
+  } catch (error) {
+    const details = getLinePushErrorDetails(error);
+    console.error("Dispatch group test push failed:", details);
+    res.status(502).json({ ok: false, groupId, error: details });
+  }
+});
+
 app.get("/api/admin/customers", adminAuth, async (_req, res) => {
   try {
     res.json(await listCustomers());
@@ -1462,11 +1479,15 @@ async function pushOrderToDispatchGroup(order) {
 }
 
 function logLinePushError(label, error) {
-  console.error(label, {
+  console.error(label, getLinePushErrorDetails(error));
+}
+
+function getLinePushErrorDetails(error) {
+  return {
     message: error?.message,
     status: error?.statusCode || error?.status,
     body: error?.body || error?.response?.data || error?.originalError?.response?.data || null
-  });
+  };
 }
 
 function getDispatchGroupId() {
