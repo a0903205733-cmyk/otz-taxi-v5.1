@@ -169,7 +169,10 @@ async function handleText(event) {
     );
   }
   const isGroupChat = ["group", "room"].includes(event.source?.type);
-  const rideText = incomingText.replace(/^我要叫車[，,、:：\s]*/, "");
+  const isFareQuoteRequest = /^我要試算車資(?:[，,、:：\s]|$)/u.test(incomingText);
+  const rideText = incomingText
+    .replace(/^我要叫車[，,、:：\s]*/u, "")
+    .replace(/^我要試算車資[，,、:：\s]*/u, "");
   const parsed = parseRideRequest(rideText);
 
   // 私訊與群組使用相同的介入條件。普通聊天在讀取客戶資料與呼叫
@@ -270,8 +273,15 @@ async function handleText(event) {
       night_surcharge: fare.nightSurcharge,
       estimated_fare: fare.estimatedFare,
       in_service_area: inServiceArea,
-      status: "awaiting_customer"
+      status: isFareQuoteRequest ? "awaiting_customer" : "pending"
     });
+
+    if (!isFareQuoteRequest) {
+      return reply(
+        event.replyToken,
+        `✅ 已建立叫車單\n訂單：${orderNo(order.id)}\n上車：${parsed.pickup}\n下車：${parsed.destination}\n等待派單。`
+      );
+    }
 
     return line.replyMessage({
       replyToken: event.replyToken,
