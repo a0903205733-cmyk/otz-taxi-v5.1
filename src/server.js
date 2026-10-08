@@ -1215,6 +1215,12 @@ async function forwardAllowedWindowMessage(event) {
   }
 
   try {
+    const body = getLineMessageBody(event);
+    if (!(await shouldForwardCapturedLineBody(event, body))) {
+      console.log(`Skipped LINE capture without valid address: ${body}`);
+      return;
+    }
+
     await line.pushMessage({
       to: groupId,
       messages: [{
@@ -1223,7 +1229,7 @@ async function forwardAllowedWindowMessage(event) {
           nickname,
           sourceType: event.source?.type || "unknown",
           messageType: event.message?.type || event.type,
-          body: getLineMessageBody(event),
+          body,
           time: new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" })
         }))
       }]
@@ -1243,6 +1249,51 @@ function getLineMessageBody(event) {
   if (message.type === "file") return `檔案 ${message.fileName || ""}`.trim();
   if (message.type === "location") return `位置 ${message.title || ""} ${message.address || ""}`.trim();
   return message.type || "未知訊息";
+}
+
+async function shouldForwardCapturedLineBody(event, body) {
+  const candidate = extractCapturedAddressCandidate(event, body);
+  if (!candidate || !process.env.GOOGLE_MAPS_API_KEY) return false;
+
+  try {
+    await validatePickupLocation(candidate, process.env.GOOGLE_MAPS_API_KEY);
+    return true;
+  } catch (error) {
+    console.log(`Skipped LINE capture invalid address "${candidate}": ${error.message}`);
+    return false;
+  }
+}
+
+function extractCapturedAddressCandidate(event, body) {
+  const message = event?.message || {};
+  if (message.type === "location") {
+    return cleanCapturedAddress(message.address || message.title || "");
+  }
+  if (message.type !== "text") return "";
+
+  const text = String(body || "").trim();
+  const lineCandidate = text
+    .split(/\r?\n/u)
+    .map(line => line.match(/(?:上車(?:地點|地址)?|地址)(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.+)$/u)?.[1])
+    .find(Boolean);
+  if (lineCandidate) return cleanCapturedAddress(lineCandidate);
+
+  const parsed = parseRideRequest(text);
+  if (isGroupRideRequest(text, parsed)) return cleanCapturedAddress(parsed.pickup);
+  return looksLikeCapturedAddress(parsed.pickup) ? cleanCapturedAddress(parsed.pickup) : "";
+}
+
+function cleanCapturedAddress(value) {
+  return String(value || "")
+    .split(/(?:下車(?:地點|地址)?|人數|行李|特殊需求)(?:（[^）]*）|\([^)]*\))?\s*[：:]/u)[0]
+    .replace(/^[\s,，、;；]+|[\s,，、;；]+$/g, "")
+    .trim();
+}
+
+function looksLikeCapturedAddress(value) {
+  const text = String(value || "").replace(/\s+/g, "");
+  if (!text || isPlaceholderPlace(text) || containsUnsupportedArea(text)) return false;
+  return /(?:縣|市|區|鄉|鎮|村|里|路|街|大道|巷|弄|號|東港|林邊|潮州|佳冬|枋寮|屏東|高雄|左營|小港|鳳山|高鐵|機場|碼頭|漁港|車站|醫院|診所|學校|大學|宮|廟|市場|夜市|飯店|旅館|民宿|餐廳|超商|便利商店|公園|館|店|中心)/u.test(text);
 }
 
 function formatCapturedLineMessage(values) {
