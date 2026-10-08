@@ -278,6 +278,7 @@ async function handleText(event) {
       in_service_area: inServiceArea,
       status: isFareQuoteRequest ? "awaiting_customer" : "pending"
     });
+    clearFareQuoteIntent(event);
 
     if (!isFareQuoteRequest) {
       return reply(
@@ -363,6 +364,11 @@ function rememberFareQuoteIntent(event) {
     if (!storedKey.startsWith(`${today}:`)) dailyFareQuoteIntents.delete(storedKey);
   }
   dailyFareQuoteIntents.set(key, Date.now());
+}
+
+function clearFareQuoteIntent(event) {
+  const key = getDailyFareQuoteIntentKey(event);
+  if (key) dailyFareQuoteIntents.delete(key);
 }
 
 function hasFareQuoteIntentToday(event) {
