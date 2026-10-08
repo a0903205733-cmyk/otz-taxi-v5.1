@@ -175,7 +175,7 @@ async function handleText(event) {
   if (isFareQuoteInlineRequest(incomingText)) rememberFareQuoteIntent(event);
   const rideText = incomingText
     .replace(/^我要叫車[，,、:：\s]*/u, "")
-    .replace(/^我(?:想要|要)試算車資[，,、:：\s]*/u, "");
+    .replace(/^(?:試算車資|我(?:想|想要|要)試算車資)[，,、:：\s]*/u, "");
   const parsed = parseRideRequest(rideText);
 
   // 私訊與群組使用相同的介入條件。普通聊天在讀取客戶資料與呼叫
@@ -313,7 +313,7 @@ async function handleMutedText(event) {
   }
 
   if (isFareQuoteInlineRequest(incomingText)) rememberFareQuoteIntent(event);
-  const quoteText = incomingText.replace(/^我(?:想要|要)試算車資[，,、:：\s]*/u, "");
+  const quoteText = incomingText.replace(/^(?:試算車資|我(?:想|想要|要)試算車資)[，,、:：\s]*/u, "");
   const parsed = parseRideRequest(quoteText);
   if (!parsed.pickup || !parsed.destination || !isGroupRideRequest(quoteText, parsed)) {
     console.log("Muted LINE source ignored non-quote message");
@@ -349,11 +349,11 @@ async function handleMutedText(event) {
 }
 
 function isFareQuoteKeyword(text) {
-  return /^我(?:想要|要)試算車資$/u.test(String(text || "").trim());
+  return /^(?:試算車資|我(?:想|想要|要)試算車資)$/u.test(String(text || "").trim());
 }
 
 function isFareQuoteInlineRequest(text) {
-  return /^我(?:想要|要)試算車資(?:[，,、:：\s]|$)/u.test(String(text || "").trim());
+  return /^(?:試算車資|我(?:想|想要|要)試算車資)(?:[，,、:：\s]|$)/u.test(String(text || "").trim());
 }
 
 function rememberFareQuoteIntent(event) {
