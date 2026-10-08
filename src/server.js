@@ -386,20 +386,28 @@ async function handlePostback(event) {
   const order = await getOrder(id);
 
   if (action === "confirm") {
+    if (!order) {
+      return reply(event.replyToken, "找不到這筆訂單，請重新試算或聯絡客服。");
+    }
     if (order.status !== "awaiting_customer") {
       return reply(event.replyToken, "這筆訂單已處理。");
     }
 
     await updateOrder(id, { status: "pending" });
-    await pushConfirmedOrderToDispatchGroup(order);
+    pushConfirmedOrderToDispatchGroup(order).catch(error => {
+      console.error("Confirmed order dispatch group push failed:", error);
+    });
 
     return reply(
       event.replyToken,
-      `✅ 叫車已確認\n訂單：${orderNo(id)}\n等待管理員或司機接單。`
+      `✅ 叫車已確認\n訂單：${orderNo(id)}\n為您尋找司機 請稍等 有車訊會馬上通知您`
     );
   }
 
   if (action === "cancel") {
+    if (!order) {
+      return reply(event.replyToken, "找不到這筆訂單，請重新試算或聯絡客服。");
+    }
     await updateOrder(id, {
       status: "cancelled",
       cancelled_at: new Date().toISOString()
