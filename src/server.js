@@ -170,6 +170,7 @@ async function handleText(event) {
   // 私訊與群組使用相同的介入條件。普通聊天在讀取客戶資料與呼叫
   // Google API 之前就結束，避免誤建訂單與浪費 API 額度。
   const explicitRideIntent = hasRideIntent(incomingText);
+  await forwardPickupToConfiguredGroup(event, parsed, incomingText, explicitRideIntent);
   if (incomingText !== "我要叫車" && !isGroupRideRequest(incomingText, parsed)) {
     if (explicitRideIntent && (isPlaceholderPlace(parsed.pickup) || isPlaceholderPlace(parsed.destination))) {
       return reply(event.replyToken, "請提供可導航的上車或下車地點；『我家／某某家』需先提供完整地址。");
@@ -1185,6 +1186,58 @@ async function getLineNickname(event) {
     console.warn("LINE profile lookup failed:", error.message);
     return "";
   }
+}
+
+async function forwardPickupToConfiguredGroup(event, parsed, incomingText, explicitRideIntent = false) {
+  const groupId = String(process.env.LINE_PICKUP_FORWARD_GROUP_ID || "").trim();
+  if (!groupId || !parsed?.pickup) return;
+
+  const shouldForward = explicitRideIntent ||
+    isGroupRideRequest(incomingText, parsed) ||
+    /上車(?:地點)?[：:\s]/u.test(String(incomingText || ""));
+  if (!shouldForward) return;
+
+  try {
+    const nickname = await getLineNickname(event);
+    let pickupAddress = parsed.pickup;
+    try {
+      const validated = await validatePickupLocation(parsed.pickup, process.env.GOOGLE_MAPS_API_KEY);
+      pickupAddress = validated.formattedAddress || parsed.pickup;
+    } catch (error) {
+      console.warn("Pickup forward geocode skipped:", error.message);
+    }
+
+    const text = formatPickupForwardMessage({
+      nickname,
+      pickup: parsed.pickup,
+      pickupAddress,
+      destination: parsed.destination || "未提供",
+      passengers: parsed.passengers ? `${parsed.passengers} 位` : "未提供",
+      rideTime: parsed.rideTime || "未提供",
+      sourceType: event.source?.type || "unknown",
+      originalText: incomingText
+    });
+
+    await line.pushMessage({
+      to: groupId,
+      messages: [{ type: "text", text: normalizeLineText(text) }]
+    });
+  } catch (error) {
+    console.error("Pickup forward failed:", error);
+  }
+}
+
+function formatPickupForwardMessage(values) {
+  const template = String(process.env.LINE_PICKUP_FORWARD_TEMPLATE || "").trim();
+  const fallback =
+    "🚕 新上車地點\n" +
+    "客人：{nickname}\n" +
+    "上車：{pickupAddress}\n" +
+    "下車：{destination}\n" +
+    "人數：{passengers}\n" +
+    "時間：{rideTime}\n" +
+    "原文：{originalText}";
+  return (template || fallback).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? "");
 }
 
 function getLineSourceKey(event) {
