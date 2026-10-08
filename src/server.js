@@ -1293,14 +1293,14 @@ async function forwardAllowedWindowMessage(event) {
   if (!groupId || event?.type !== "message") return;
   if (event.source?.type !== "user") return;
 
-  const allowedName = String(process.env.LINE_CAPTURE_ALLOWED_NAME || "輝”>Σ").trim();
-  const nickname = await getLineNickname(event);
-  if (nickname !== allowedName) {
-    console.log(`Skipped LINE capture from window: ${nickname || "unknown"}`);
-    return;
-  }
-
   try {
+    const allowedName = String(process.env.LINE_CAPTURE_ALLOWED_NAME || "").trim();
+    const nickname = await getLineNickname(event);
+    if (allowedName && nickname !== allowedName) {
+      console.log(`Skipped LINE capture from window: ${nickname || "unknown"}`);
+      return;
+    }
+
     const body = getLineMessageBody(event);
     const capturedRoute = await getValidatedCapturedRoute(event, body);
     if (!capturedRoute) {
@@ -1326,8 +1326,9 @@ async function forwardAllowedWindowMessage(event) {
         }))
       }]
     });
+    console.log(`Captured LINE pickup forwarded to group ${groupId}: ${capturedRoute.pickup}`);
   } catch (error) {
-    console.error("Allowed window capture forward failed:", error);
+    logLinePushError("LINE pickup capture forward failed", error);
   }
 }
 
