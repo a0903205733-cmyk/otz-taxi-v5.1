@@ -400,14 +400,21 @@ async function handlePostback(event) {
         return reply(event.replyToken, "這筆訂單已處理。");
       }
 
-      await updateOrder(id, { status: "pending" });
-      pushConfirmedOrderToDispatchGroup(order).catch(error => {
+      const updatedOrder = await updateOrder(id, { status: "pending" });
+      await createAuditLog({
+        actor_type: "customer",
+        action: "order.confirm",
+        entity_type: "order",
+        entity_id: String(id),
+        details: { status: "pending" }
+      });
+      pushConfirmedOrderToDispatchGroup(updatedOrder).catch(error => {
         console.error("Confirmed order dispatch group push failed:", error);
       });
 
       return reply(
         event.replyToken,
-        `✅ 叫車已確認\n訂單：${orderNo(id)}\n為您尋找司機 請稍等 有車訊會馬上通知您`
+        `✅ 叫車已確認\n訂單：${orderNo(id)}\n已進入派單系統\n為您尋找司機 請稍等 有車訊會馬上通知您`
       );
     }
 
