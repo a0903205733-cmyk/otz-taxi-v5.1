@@ -281,15 +281,18 @@ async function handleText(event) {
     clearFareQuoteIntent(event);
 
     if (!isFareQuoteRequest) {
-      pushOrderToDispatchGroup(order).catch(error => {
-        console.error("Direct order dispatch group push failed:", error);
+      const dispatched = await pushOrderToDispatchGroup(order).catch(error => {
+        logLinePushError("Direct order dispatch group push failed", error);
+        return false;
       });
 
       return reply(
         event.replyToken,
         `✅ 已建立叫車單\n訂單：${orderNo(order.id)}\n` +
           `${formatRideRequestTemplate({ pickup: parsed.pickup, destination: parsed.destination })}\n` +
-          "為您尋找司機 請稍等 有車訊會馬上通知您"
+          (dispatched
+            ? "為您尋找司機 請稍等 有車訊會馬上通知您"
+            : "⚠️ 群組派單失敗，請聯絡客服確認 LINE 群組設定")
       );
     }
 
@@ -414,13 +417,17 @@ async function handlePostback(event) {
       }).catch(error => {
         console.error("Order confirm audit log failed:", error);
       });
-      pushOrderToDispatchGroup(updatedOrder).catch(error => {
-        console.error("Confirmed order dispatch group push failed:", error);
+      const dispatched = await pushOrderToDispatchGroup(updatedOrder).catch(error => {
+        logLinePushError("Confirmed order dispatch group push failed", error);
+        return false;
       });
 
       return reply(
         event.replyToken,
-        `✅ 叫車已確認\n訂單：${orderNo(id)}\n已進入派單系統\n為您尋找司機 請稍等 有車訊會馬上通知您`
+        `✅ 叫車已確認\n訂單：${orderNo(id)}\n已進入派單系統\n` +
+          (dispatched
+            ? "為您尋找司機 請稍等 有車訊會馬上通知您"
+            : "⚠️ 群組派單失敗，請聯絡客服確認 LINE 群組設定")
       );
     }
 
@@ -1453,6 +1460,14 @@ async function pushOrderToDispatchGroup(order) {
   return true;
 }
 
+function logLinePushError(label, error) {
+  console.error(label, {
+    message: error?.message,
+    status: error?.statusCode || error?.status,
+    body: error?.body || error?.response?.data || error?.originalError?.response?.data || null
+  });
+}
+
 function getDispatchGroupId() {
   return String(
     process.env.LINE_DISPATCH_GROUP_ID ||
@@ -1463,11 +1478,8 @@ function getDispatchGroupId() {
 function formatRideRequestTemplate(values) {
   return [
     "60/20/2",
-    `🔴➡️ 上車地點（必填）：${values.pickup || ""}`,
-    `🔴➡️ 下車地點（必填）：${values.destination || ""}`,
-    `🔴➡️ 人數 ：${values.passengers || ""}`,
-    `🔴➡️ 行李 ：${values.luggage || ""}`,
-    `🔴➡️ 特殊需求：${values.specialNeeds || ""}`
+    `上車地點:${values.pickup || ""}`,
+    `下車地點:${values.destination || ""}`
   ].join("\n");
 }
 
