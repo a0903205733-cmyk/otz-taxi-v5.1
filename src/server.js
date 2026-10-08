@@ -1483,17 +1483,15 @@ function queueDispatchGroupScan() {
 
 async function autoDispatchPendingOrders() {
   try {
-    const [orders, auditLogs] = await Promise.all([listOrders(), listAuditLogs()]);
-    const alreadyLogged = new Set(
-      auditLogs
-        .filter(log => log.action === "order.dispatch_group" && log.entity_type === "order")
-        .map(log => String(log.entity_id))
-    );
+    const orders = await listOrders();
     const pendingOrders = orders.filter(order => order.status === "pending");
+    let attempted = 0;
+    console.log(`Auto dispatch scan: pending=${pendingOrders.length}, group=${getDispatchGroupId()}`);
 
     for (const order of pendingOrders) {
       const orderId = String(order.id);
-      if (dispatchGroupPushedOrderIds.has(orderId) || alreadyLogged.has(orderId)) continue;
+      if (dispatchGroupPushedOrderIds.has(orderId)) continue;
+      attempted += 1;
 
       const pushed = await pushOrderToDispatchGroup(order).catch(error => {
         logLinePushError(`Auto dispatch order ${orderNo(order.id)} failed`, error);
@@ -1503,6 +1501,7 @@ async function autoDispatchPendingOrders() {
 
       markOrderDispatchedToGroup(order, { auto: true, source: "scanner" });
     }
+    console.log(`Auto dispatch scan finished: attempted=${attempted}`);
   } catch (error) {
     logLinePushError("Auto dispatch pending orders failed", error);
   }
