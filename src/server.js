@@ -201,7 +201,7 @@ async function handleText(event) {
           "請輸入：上車地點到下車地點、時間、人數\n例如：明天早上八點，東港到林邊，2位"
       );
     }
-    if (!isGroupRideRequest(incomingText, parsed)) {
+    if (!isFareQuoteRequest && !isGroupRideRequest(incomingText, parsed)) {
       console.log("Ignored non-ride group message");
       return;
     }
@@ -217,7 +217,7 @@ async function handleText(event) {
       : ["常見問題", "試算車資", "應徵司機"]
   );
 
-  if (ignoredKeywords.has(incomingText)) {
+  if (!isFareQuoteRequest && ignoredKeywords.has(incomingText)) {
     console.log(`Ignored LINE keyword: ${incomingText}`);
     return;
   }
@@ -315,7 +315,7 @@ async function handleMutedText(event) {
   if (isFareQuoteInlineRequest(incomingText)) rememberFareQuoteIntent(event);
   const quoteText = incomingText.replace(/^(?:試算車資|我(?:想|想要|要)試算車資)[，,、:：\s]*/u, "");
   const parsed = parseRideRequest(quoteText);
-  if (!parsed.pickup || !parsed.destination || !isGroupRideRequest(quoteText, parsed)) {
+  if (!parsed.pickup || !parsed.destination) {
     console.log("Muted LINE source ignored non-quote message");
     return;
   }
@@ -401,12 +401,14 @@ async function handlePostback(event) {
       }
 
       const updatedOrder = await updateOrder(id, { status: "pending" });
-      await createAuditLog({
+      createAuditLog({
         actor_type: "customer",
         action: "order.confirm",
         entity_type: "order",
         entity_id: String(id),
         details: { status: "pending" }
+      }).catch(error => {
+        console.error("Order confirm audit log failed:", error);
       });
       pushConfirmedOrderToDispatchGroup(updatedOrder).catch(error => {
         console.error("Confirmed order dispatch group push failed:", error);
