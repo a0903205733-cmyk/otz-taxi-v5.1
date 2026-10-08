@@ -281,6 +281,10 @@ async function handleText(event) {
     clearFareQuoteIntent(event);
 
     if (!isFareQuoteRequest) {
+      pushOrderToDispatchGroup(order).catch(error => {
+        console.error("Direct order dispatch group push failed:", error);
+      });
+
       return reply(
         event.replyToken,
         `✅ 已建立叫車單\n訂單：${orderNo(order.id)}\n` +
@@ -410,7 +414,7 @@ async function handlePostback(event) {
       }).catch(error => {
         console.error("Order confirm audit log failed:", error);
       });
-      pushConfirmedOrderToDispatchGroup(updatedOrder).catch(error => {
+      pushOrderToDispatchGroup(updatedOrder).catch(error => {
         console.error("Confirmed order dispatch group push failed:", error);
       });
 
@@ -1428,7 +1432,7 @@ function formatCapturedLineMessage(values) {
   return formatRideRequestTemplate(values);
 }
 
-async function pushConfirmedOrderToDispatchGroup(order) {
+async function pushOrderToDispatchGroup(order) {
   const groupId = getDispatchGroupId();
   if (!groupId || !order) return false;
 
@@ -1445,14 +1449,13 @@ async function pushConfirmedOrderToDispatchGroup(order) {
       }))
     }]
   });
-  console.log(`Confirmed order ${orderNo(order.id)} pushed to dispatch group ${groupId}`);
+  console.log(`Order ${orderNo(order.id)} pushed to dispatch group ${groupId}`);
   return true;
 }
 
 function getDispatchGroupId() {
   return String(
     process.env.LINE_DISPATCH_GROUP_ID ||
-      process.env.LINE_CAPTURE_FORWARD_GROUP_ID ||
       "Cddc86808ba9af00baf20e85a8029b379"
   ).trim();
 }
