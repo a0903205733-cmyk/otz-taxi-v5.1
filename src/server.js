@@ -1243,6 +1243,9 @@ async function forwardAllowedWindowMessage(event) {
           body,
           pickup: capturedRoute.pickup,
           destination: capturedRoute.destination,
+          passengers: capturedRoute.passengers,
+          luggage: capturedRoute.luggage,
+          specialNeeds: capturedRoute.specialNeeds,
           time: new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" })
         }))
       }]
@@ -1285,10 +1288,13 @@ function extractCapturedRoute(event, body) {
   if (message.type === "location") {
     return {
       pickup: cleanCapturedAddress(message.address || message.title || ""),
-      destination: ""
+      destination: "",
+      passengers: "",
+      luggage: "",
+      specialNeeds: ""
     };
   }
-  if (message.type !== "text") return { pickup: "", destination: "" };
+  if (message.type !== "text") return { pickup: "", destination: "", passengers: "", luggage: "", specialNeeds: "" };
 
   const text = String(body || "").trim();
   const lines = text.split(/\r?\n/u);
@@ -1298,10 +1304,16 @@ function extractCapturedRoute(event, body) {
   const destinationLine = lines
     .map(line => line.match(/(?:下車(?:地點|地址)?|目的地)(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.+)$/u)?.[1])
     .find(Boolean);
+  const passengersLine = extractCapturedFormValue(lines, /人數(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u);
+  const luggageLine = extractCapturedFormValue(lines, /行李(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u);
+  const specialNeedsLine = extractCapturedFormValue(lines, /特殊需求(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u);
   if (pickupLine || destinationLine) {
     return {
       pickup: cleanCapturedAddress(pickupLine || ""),
-      destination: cleanCapturedAddress(destinationLine || "")
+      destination: cleanCapturedAddress(destinationLine || ""),
+      passengers: cleanCapturedField(passengersLine),
+      luggage: cleanCapturedField(luggageLine),
+      specialNeeds: cleanCapturedField(specialNeedsLine)
     };
   }
 
@@ -1309,13 +1321,25 @@ function extractCapturedRoute(event, body) {
   if (isGroupRideRequest(text, parsed)) {
     return {
       pickup: cleanCapturedAddress(parsed.pickup),
-      destination: cleanCapturedAddress(parsed.destination)
+      destination: cleanCapturedAddress(parsed.destination),
+      passengers: parsed.passengers ? `${parsed.passengers}` : "",
+      luggage: "",
+      specialNeeds: ""
     };
   }
   return {
     pickup: looksLikeCapturedAddress(parsed.pickup) ? cleanCapturedAddress(parsed.pickup) : "",
-    destination: ""
+    destination: "",
+    passengers: parsed.passengers ? `${parsed.passengers}` : "",
+    luggage: "",
+    specialNeeds: ""
   };
+}
+
+function extractCapturedFormValue(lines, pattern) {
+  return lines
+    .map(line => line.match(pattern)?.[1])
+    .find(value => value !== undefined);
 }
 
 function cleanCapturedAddress(value) {
@@ -1323,6 +1347,10 @@ function cleanCapturedAddress(value) {
     .split(/(?:下車(?:地點|地址)?|人數|行李|特殊需求)(?:（[^）]*）|\([^)]*\))?\s*[：:]/u)[0]
     .replace(/^[\s,，、;；]+|[\s,，、;；]+$/g, "")
     .trim();
+}
+
+function cleanCapturedField(value) {
+  return String(value || "").replace(/^[\s,，、;；]+|[\s,，、;；]+$/g, "").trim();
 }
 
 function looksLikeCapturedAddress(value) {
@@ -1334,8 +1362,11 @@ function looksLikeCapturedAddress(value) {
 function formatCapturedLineMessage(values) {
   return [
     "60/20/2",
-    `上車地點:${values.pickup || ""}`,
-    `下車地點:${values.destination || ""}`
+    `🔴➡️ 上車地點（必填）：${values.pickup || ""}`,
+    `🔴➡️ 下車地點（必填）：${values.destination || ""}`,
+    `🔴➡️ 人數 ：${values.passengers || ""}`,
+    `🔴➡️ 行李 ：${values.luggage || ""}`,
+    `🔴➡️ 特殊需求：${values.specialNeeds || ""}`
   ].join("\n");
 }
 
