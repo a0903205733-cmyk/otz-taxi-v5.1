@@ -181,7 +181,7 @@ async function handleText(event) {
   // 私訊與群組使用相同的介入條件。普通聊天在讀取客戶資料與呼叫
   // Google API 之前就結束，避免誤建訂單與浪費 API 額度。
   const explicitRideIntent = hasRideIntent(incomingText);
-  if (incomingText !== "我要叫車" && !isGroupRideRequest(incomingText, parsed)) {
+  if (!isFareQuoteRequest && incomingText !== "我要叫車" && !isGroupRideRequest(incomingText, parsed)) {
     if (explicitRideIntent && (isPlaceholderPlace(parsed.pickup) || isPlaceholderPlace(parsed.destination))) {
       return reply(event.replyToken, "請提供可導航的上車或下車地點；『我家／某某家』需先提供完整地址。");
     }
