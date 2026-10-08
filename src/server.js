@@ -116,6 +116,10 @@ async function handleLineEvent(event) {
   if (event.type === "message" && event.message.type === "text") {
     const incomingText = String(event.message.text || "").trim();
 
+    if (incomingText === "查群組ID") {
+      return replyLineSourceId(event);
+    }
+
     if (BOT_RESUME_KEYWORDS.has(incomingText)) {
       await stopHumanHandoff(sourceKey);
       return reply(event.replyToken, "已恢復機器人自動回覆。");
@@ -1166,6 +1170,16 @@ function reply(replyToken, text) {
     replyToken,
     messages: [{ type: "text", text: normalizeLineText(text) }]
   });
+}
+
+function replyLineSourceId(event) {
+  if (event.source?.type === "group" && event.source?.groupId) {
+    return reply(event.replyToken, `此群組 ID：\n${event.source.groupId}`);
+  }
+  if (event.source?.type === "room" && event.source?.roomId) {
+    return reply(event.replyToken, `此聊天室 ID：\n${event.source.roomId}`);
+  }
+  return reply(event.replyToken, "這裡不是群組，請到「司機接單群」輸入：查群組ID");
 }
 
 async function getLineNickname(event) {
