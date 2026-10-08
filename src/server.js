@@ -1294,9 +1294,9 @@ async function forwardAllowedWindowMessage(event) {
   if (event.source?.type !== "user") return;
 
   try {
-    const allowedName = String(process.env.LINE_CAPTURE_ALLOWED_NAME || "").trim();
+    const allowedName = String(process.env.LINE_CAPTURE_ALLOWED_NAME || "輝”>Σ").trim();
     const nickname = await getLineNickname(event);
-    if (allowedName && nickname !== allowedName) {
+    if (nickname !== allowedName) {
       console.log(`Skipped LINE capture from window: ${nickname || "unknown"}`);
       return;
     }
