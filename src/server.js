@@ -36,6 +36,7 @@ const realtimeClients = new Set();
 const pickupEtaCache = new Map();
 const humanHandoffTimers = new Map();
 const dailyFareQuoteIntents = new Map();
+const recentLineWebhookEvents = [];
 const DEFAULT_ADMIN_TOKEN = "0908160150";
 const LINE_MUTED_SOURCES_SETTING = "muted_line_sources";
 const HUMAN_HANDOFF_AUTO_RESUME_MS = 3 * 60 * 1000;
@@ -84,6 +85,13 @@ app.use("/driver", express.static("public/driver"));
 
 app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
   if (!isValidLineSignature(req)) {
+    rememberLineWebhookEvent({
+      ok: false,
+      type: "signature_failed",
+      source: null,
+      message: null,
+      rawSize: Buffer.isBuffer(req.body) ? req.body.length : 0
+    });
     console.error("LINE webhook signature verification failed.");
     return res.status(401).end();
   }
@@ -96,6 +104,8 @@ app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
     return res.status(400).end();
   }
 
+  rememberLineWebhookEvents(body.events || []);
+
   res.status(200).end();
 
   try {
@@ -104,6 +114,36 @@ app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
     console.error("Webhook error:", error);
   }
 });
+
+function rememberLineWebhookEvents(events) {
+  for (const event of events) {
+    rememberLineWebhookEvent({
+      ok: true,
+      type: event?.type || "",
+      source: event?.source || null,
+      message: summarizeLineEventMessage(event),
+      timestamp: event?.timestamp || null
+    });
+  }
+}
+
+function rememberLineWebhookEvent(entry) {
+  recentLineWebhookEvents.unshift({
+    time: new Date().toISOString(),
+    ...entry
+  });
+  recentLineWebhookEvents.splice(30);
+}
+
+function summarizeLineEventMessage(event) {
+  if (!event?.message) return null;
+  const message = event.message;
+  if (message.type === "text") return { type: "text", text: message.text || "" };
+  return {
+    type: message.type || "",
+    id: message.id || null
+  };
+}
 
 function getLineChannelSecrets() {
   return [
@@ -955,6 +995,10 @@ app.post("/api/admin/line/resume-all", adminAuth, async (_req, res) => {
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
   }
+});
+
+app.get("/api/admin/line/webhook-events", adminAuth, async (_req, res) => {
+  res.json({ ok: true, events: recentLineWebhookEvents });
 });
 
 app.get("/api/admin/customers", adminAuth, async (_req, res) => {
