@@ -946,6 +946,17 @@ app.post("/api/admin/line/dispatch-test", adminAuth, async (req, res) => {
   }
 });
 
+app.post("/api/admin/line/resume-all", adminAuth, async (_req, res) => {
+  try {
+    for (const timer of humanHandoffTimers.values()) clearTimeout(timer);
+    humanHandoffTimers.clear();
+    await updateSetting(LINE_MUTED_SOURCES_SETTING, []);
+    res.json({ ok: true, muted: [] });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/api/admin/customers", adminAuth, async (_req, res) => {
   try {
     res.json(await listCustomers());
