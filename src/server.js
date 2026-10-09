@@ -160,7 +160,7 @@ async function handleLineEvent(event) {
   if (event.type === "message" && event.message.type === "text") {
     const incomingText = String(event.message.text || "").trim();
 
-    if (incomingText === "查群組ID") {
+    if (incomingText === "查群組ID" || incomingText === "查ID") {
       return replyLineSourceId(event);
     }
 
