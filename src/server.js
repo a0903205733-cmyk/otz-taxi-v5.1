@@ -2,7 +2,8 @@ import express from "express";
 import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { middleware, messagingApi } from "@line/bot-sdk";
+import crypto from "crypto";
+import { messagingApi } from "@line/bot-sdk";
 import {
   parseRideRequest, classifyRideSchedule, isGroupRideRequest,
   hasRideIntent, isPlaceholderPlace, containsUnsupportedArea
@@ -60,7 +61,7 @@ app.get("/health", async (_req, res) => {
   const checks = {
     app: "ok",
     version: "5.3.6",
-    line: Boolean(process.env.LINE_CHANNEL_SECRET && process.env.LINE_CHANNEL_ACCESS_TOKEN),
+    line: Boolean(getLineChannelSecrets().length && process.env.LINE_CHANNEL_ACCESS_TOKEN),
     google_maps: Boolean(process.env.GOOGLE_MAPS_API_KEY),
     supabase: Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY),
     jwt: Boolean(process.env.JWT_SECRET),
@@ -81,15 +82,56 @@ app.get("/health", async (_req, res) => {
 app.use("/admin", express.static("public/admin"));
 app.use("/driver", express.static("public/driver"));
 
-app.post("/webhook", middleware({ channelSecret: process.env.LINE_CHANNEL_SECRET }), async (req, res) => {
+app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
+  if (!isValidLineSignature(req)) {
+    console.error("LINE webhook signature verification failed.");
+    return res.status(401).end();
+  }
+
+  let body;
+  try {
+    body = JSON.parse(req.body.toString("utf8") || "{}");
+  } catch (error) {
+    console.error("LINE webhook JSON parse failed:", error);
+    return res.status(400).end();
+  }
+
   res.status(200).end();
 
   try {
-    await Promise.all(req.body.events.map(handleLineEvent));
+    await Promise.all((body.events || []).map(handleLineEvent));
   } catch (error) {
     console.error("Webhook error:", error);
   }
 });
+
+function getLineChannelSecrets() {
+  return [
+    process.env.LINE_CHANNEL_SECRET,
+    ...String(process.env.LINE_CHANNEL_SECRETS || "")
+      .split(/[\n,]+/)
+  ]
+    .map(secret => String(secret || "").trim())
+    .filter(Boolean);
+}
+
+function isValidLineSignature(req) {
+  const signature = String(req.get("x-line-signature") || "");
+  if (!signature) return false;
+
+  const body = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body || ""));
+  return getLineChannelSecrets().some(secret => {
+    const expected = crypto
+      .createHmac("sha256", secret)
+      .update(body)
+      .digest("base64");
+
+    const expectedBuffer = Buffer.from(expected);
+    const signatureBuffer = Buffer.from(signature);
+    return expectedBuffer.length === signatureBuffer.length &&
+      crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
+  });
+}
 
 async function handleLineEvent(event) {
   const sourceKey = getLineSourceKey(event);
