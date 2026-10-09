@@ -932,9 +932,12 @@ app.put("/api/admin/settings", adminAuth, async (req, res) => {
 app.post("/api/admin/line/dispatch-test", adminAuth, async (req, res) => {
   const groupId = String(req.body.groupId || getDispatchGroupId()).trim();
   const text = normalizeLineText(req.body.text || "OTZ 派單群組測試\n60/20/2\n上車地點:測試\n下車地點:測試");
+  const accountIndex = Number.isInteger(Number(req.body.accountIndex))
+    ? Number(req.body.accountIndex) - 1
+    : null;
 
   try {
-    const result = await pushDispatchLineMessage(groupId, text);
+    const result = await pushDispatchLineMessage(groupId, text, { accountIndex });
     res.json({ ok: true, groupId, account: result.name });
   } catch (error) {
     const details = getLinePushErrorDetails(error);
@@ -1513,20 +1516,29 @@ async function pushOrderToDispatchGroup(order) {
   return true;
 }
 
-async function pushDispatchLineMessage(groupId, text) {
+async function pushDispatchLineMessage(groupId, text, options = {}) {
   const accounts = getDispatchLineAccounts();
   const errors = [];
+  const forcedIndex = Number.isInteger(options.accountIndex) ? options.accountIndex : null;
+  const attempts = forcedIndex === null ? accounts.length : 1;
 
-  for (let attempt = 0; attempt < accounts.length; attempt += 1) {
-    const index = (dispatchTokenCursor + attempt) % accounts.length;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const index = forcedIndex === null
+      ? (dispatchTokenCursor + attempt) % accounts.length
+      : forcedIndex;
     const account = accounts[index];
+    if (!account) {
+      const error = new Error(`Dispatch account ${forcedIndex + 1} is not configured`);
+      error.dispatchErrors = errors;
+      throw error;
+    }
 
     try {
       await account.client.pushMessage({
         to: groupId,
         messages: [{ type: "text", text }]
       });
-      dispatchTokenCursor = (index + 1) % accounts.length;
+      if (forcedIndex === null) dispatchTokenCursor = (index + 1) % accounts.length;
       return { name: account.name, index };
     } catch (error) {
       const details = getLinePushErrorDetails(error);
