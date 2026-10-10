@@ -37,11 +37,13 @@ const pickupEtaCache = new Map();
 const humanHandoffTimers = new Map();
 const dailyFareQuoteIntents = new Map();
 const pendingRideConfirmations = new Map();
+const recentRideDispatches = new Map();
 const recentLineWebhookEvents = [];
 const DEFAULT_ADMIN_TOKEN = "0908160150";
 const LINE_MUTED_SOURCES_SETTING = "muted_line_sources";
 const HUMAN_HANDOFF_AUTO_RESUME_MS = 3 * 60 * 1000;
 const RIDE_CONFIRMATION_TTL_MS = 5 * 60 * 1000;
+const RECENT_RIDE_DISPATCH_TTL_MS = 5 * 60 * 1000;
 const HUMAN_HANDOFF_KEYWORDS = new Set([
   "人工介入", "轉人工", "人工客服",
   "手動聊天", "開始手動聊天", "人工聊天", "開始人工聊天"
@@ -232,6 +234,10 @@ async function handleLineEvent(event) {
 
 async function handleText(event) {
   const incomingText = String(event.message.text || "").trim();
+  if (isDispatchBotTagged(event, incomingText)) {
+    return handleDispatchBotTagged(event, incomingText);
+  }
+
   const rideConfirmation = getPendingRideConfirmation(event);
   if (rideConfirmation && incomingText === "1") {
     clearPendingRideConfirmation(event);
@@ -341,6 +347,13 @@ async function handleText(event) {
       console.log(`Skipped auto ride confirmation for ${nickname || "unknown"}`);
       return;
     }
+    const recentDispatch = getRecentRideDispatch(event);
+    if (recentDispatch) {
+      return reply(
+        event.replyToken,
+        `5 分鐘內已建立派單：${orderNo(recentDispatch.orderId)}，不重複建立。`
+      );
+    }
 
     rememberPendingRideConfirmation(event, parsed);
     return reply(
@@ -414,6 +427,7 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings) 
         logLinePushError("Direct order dispatch group push failed", error);
         return false;
       });
+      if (dispatched) rememberRecentRideDispatch(event, order);
 
       return reply(
         event.replyToken,
@@ -540,6 +554,38 @@ function clearPendingRideConfirmation(event) {
   if (key) pendingRideConfirmations.delete(key);
 }
 
+function rememberRecentRideDispatch(event, order) {
+  const key = getRideConfirmationKey(event);
+  if (!key || !order?.id) return;
+  cleanupRecentRideDispatches();
+  recentRideDispatches.set(key, {
+    orderId: order.id,
+    createdAt: Date.now()
+  });
+}
+
+function getRecentRideDispatch(event) {
+  const key = getRideConfirmationKey(event);
+  if (!key) return null;
+  cleanupRecentRideDispatches();
+  const recent = recentRideDispatches.get(key);
+  if (!recent) return null;
+  if (Date.now() - recent.createdAt > RECENT_RIDE_DISPATCH_TTL_MS) {
+    recentRideDispatches.delete(key);
+    return null;
+  }
+  return recent;
+}
+
+function cleanupRecentRideDispatches() {
+  const now = Date.now();
+  for (const [key, recent] of recentRideDispatches.entries()) {
+    if (now - recent.createdAt > RECENT_RIDE_DISPATCH_TTL_MS) {
+      recentRideDispatches.delete(key);
+    }
+  }
+}
+
 function cleanupPendingRideConfirmations() {
   const now = Date.now();
   for (const [key, pending] of pendingRideConfirmations.entries()) {
@@ -615,6 +661,69 @@ async function handlePostback(event) {
     console.error("Postback handling failed:", error);
     return reply(event.replyToken, "叫車確認失敗，請重新試算或聯絡客服。");
   }
+}
+
+async function handleDispatchBotTagged(event, incomingText) {
+  const completion = parseDispatchCompletionText(incomingText);
+  if (!completion.orderId) {
+    return reply(event.replyToken, "請在標記訊息中包含訂單編號，例如 OTZ-000123。");
+  }
+  if (!completion.fourDigits || !completion.color || !completion.twoDigits) {
+    return reply(event.replyToken, "資料不完整，請提供四位數字、顏色、兩位數字。");
+  }
+
+  try {
+    const order = await getOrder(completion.orderId);
+    const updated = await updateOrder(order.id, {
+      status: "completed",
+      completed_at: new Date().toISOString()
+    });
+    await createAuditLog({
+      actor_type: "line",
+      action: "order.dispatch_tag_complete",
+      entity_type: "order",
+      entity_id: String(order.id),
+      details: {
+        source: event.source,
+        raw_text: incomingText,
+        four_digits: completion.fourDigits,
+        color: completion.color,
+        two_digits: completion.twoDigits
+      }
+    });
+    await notifyCustomer(updated, "complete").catch(error => {
+      logLinePushError("Dispatch tag complete customer notification failed", error);
+    });
+    const nickname = await getLineNickname(event);
+    return reply(
+      event.replyToken,
+      `${nickname ? `@${nickname} ` : ""}已紀錄完成 ${orderNo(order.id)}：${completion.fourDigits} ${completion.color} ${completion.twoDigits}`
+    );
+  } catch (error) {
+    console.error("Dispatch bot tag completion failed:", error);
+    return reply(event.replyToken, "紀錄完成失敗，請確認訂單編號是否正確。");
+  }
+}
+
+function isDispatchBotTagged(event, text) {
+  const sourceType = event?.source?.type;
+  if (!["group", "room"].includes(sourceType)) return false;
+  const mentionees = event?.message?.mention?.mentionees || [];
+  if (mentionees.length && /@(?:派單機器人|OTZ|A[1-4])/iu.test(text)) return true;
+  return /@(?:派單機器人|派單機器人A[1-4]|OTZ|A[1-4])/iu.test(text);
+}
+
+function parseDispatchCompletionText(text) {
+  const source = String(text || "");
+  const orderMatch = source.match(/OTZ[-\s]?0*(\d{1,6})/iu) || source.match(/訂單[：:\s#]*0*(\d{1,6})/u);
+  const colorMatch = source.match(/(黑色|白色|灰色|銀色|紅色|藍色|綠色|黃色|金色|橘色|紫色|棕色|咖啡色|粉紅色|黑|白|灰|銀|紅|藍|綠|黃|金|橘|紫|棕|咖啡|粉紅)/u);
+  const digitMatches = [...source.matchAll(/(?<!\d)(\d{2,4})(?!\d)/gu)].map(match => match[1]);
+  return {
+    orderId: orderMatch ? Number(orderMatch[1]) : null,
+    fourDigits: digitMatches.find(value => value.length === 4) || "",
+    color: colorMatch ? colorMatch[1] : "",
+    twoDigits: digitMatches.find(value => value.length === 2) || ""
+  };
 }
 
 app.use(express.json());
@@ -1681,13 +1790,16 @@ async function pushOrderToDispatchGroup(order) {
   const groupIds = getDispatchGroupIds();
   if (!groupIds.length || !order) return false;
 
-  const text = normalizeLineText(formatRideRequestTemplate({
-    pickup: order.pickup,
-    destination: order.destination,
-    passengers: order.passengers ? `${order.passengers}` : "",
-    luggage: "",
-    specialNeeds: ""
-  }));
+  const text = normalizeLineText([
+    `訂單:${orderNo(order.id)}`,
+    formatRideRequestTemplate({
+      pickup: order.pickup,
+      destination: order.destination,
+      passengers: order.passengers ? `${order.passengers}` : "",
+      luggage: "",
+      specialNeeds: ""
+    })
+  ].join("\n"));
   const results = await pushDispatchLineMessages(groupIds, text);
   console.log(`Order ${orderNo(order.id)} pushed to dispatch groups ${groupIds.join(",")} by ${results.map(item => item.account).join(",")}`);
   return true;
@@ -1717,12 +1829,13 @@ async function dispatchTestOrder(event, incomingText = "") {
 
 async function pushDispatchLineMessages(groupIds, text, options = {}) {
   const ids = [...new Set(groupIds.map(groupId => String(groupId || "").trim()).filter(Boolean))];
+  const dispatchText = withDispatchMentionAll(text);
   const results = [];
   const errors = [];
 
   for (const groupId of ids) {
     try {
-      const result = await pushDispatchLineMessage(groupId, text, options);
+      const result = await pushDispatchLineMessage(groupId, dispatchText, options);
       results.push({ groupId, account: result.name });
     } catch (error) {
       const details = getLinePushErrorDetails(error);
@@ -1774,6 +1887,12 @@ async function pushDispatchLineMessage(groupId, text, options = {}) {
   const error = new Error("All LINE dispatch accounts failed");
   error.dispatchErrors = errors;
   throw error;
+}
+
+function withDispatchMentionAll(text) {
+  const normalized = normalizeLineText(text);
+  if (/^@All(?:\s|\n|$)/u.test(normalized)) return normalized;
+  return `@All\n${normalized}`;
 }
 
 function getDispatchLineAccounts() {
