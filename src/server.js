@@ -1924,6 +1924,21 @@ async function pushDispatchLineMessage(groupId, text, options = {}) {
       return { name: account.name, index };
     } catch (error) {
       const details = getLinePushErrorDetails(error);
+      if (details.status === 400) {
+        try {
+          await account.client.pushMessage({
+            to: groupId,
+            messages: [createDispatchPlainTextMessage(text)]
+          });
+          console.warn(`Dispatch mention-all failed by ${account.name}; sent plain fallback to ${groupId}`);
+          if (forcedIndex === null) dispatchTokenCursor = (index + 1) % accounts.length;
+          return { name: `${account.name}:plain`, index };
+        } catch (fallbackError) {
+          const fallbackDetails = getLinePushErrorDetails(fallbackError);
+          errors.push({ account: `${account.name}:plain`, ...fallbackDetails });
+          console.error(`Dispatch plain fallback failed by ${account.name}:`, fallbackDetails);
+        }
+      }
       errors.push({ account: account.name, ...details });
       console.error(`Dispatch push failed by ${account.name}:`, details);
     }
@@ -1952,6 +1967,13 @@ function createDispatchTextMessage(text) {
         mentionee: { type: "all" }
       }
     }
+  };
+}
+
+function createDispatchPlainTextMessage(text) {
+  return {
+    type: "text",
+    text: withDispatchMentionAll(text)
   };
 }
 
