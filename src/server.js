@@ -219,6 +219,10 @@ async function handleLineEvent(event) {
       await startHumanHandoff(sourceKey, "keyword");
       return reply(event.replyToken, "已切換人工處理，此聊天窗口的機器人自動回覆已關閉，3 分鐘無真人客服回應後會自動恢復。");
     }
+
+    if (isDispatchBotTagged(event, incomingText)) {
+      return handleDispatchBotTagged(event, incomingText);
+    }
   }
 
   if (await isLineSourceMuted(sourceKey)) {
@@ -714,8 +718,9 @@ function isDispatchBotTagged(event, text) {
   const sourceType = event?.source?.type;
   if (!["group", "room"].includes(sourceType)) return false;
   const mentionees = event?.message?.mention?.mentionees || [];
-  if (mentionees.length && /@(?:派單機器人|OTZ|A[1-4])/iu.test(text)) return true;
-  return /@(?:派單機器人|派單機器人A[1-4]|OTZ|A[1-4])/iu.test(text);
+  const dispatchMentionPattern = /@(?:派單機器人(?:\s*[AＡ]?\s*[1-4])?|OTZ|[AＡ]\s*[1-4])/iu;
+  if (mentionees.length && dispatchMentionPattern.test(text)) return true;
+  return dispatchMentionPattern.test(text);
 }
 
 function parseDispatchCompletionText(text) {
