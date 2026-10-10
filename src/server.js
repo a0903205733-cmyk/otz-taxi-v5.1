@@ -1615,8 +1615,8 @@ async function dispatchTestOrder(event, incomingText = "") {
   const text = normalizeLineText([
     "測試單",
     "60/20/2",
-    parsed.pickup || "上車點",
-    parsed.destination || "下車點"
+    `上車地點:${parsed.pickup || "上車點"}`,
+    `下車地點:${parsed.destination || "下車點"}`
   ].join("\n"));
 
   try {
