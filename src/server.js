@@ -52,7 +52,8 @@ const BOT_RESUME_KEYWORDS = new Set([
   "解除人工介入", "恢復機器人", "開啟機器人",
   "結束手動聊天", "結束人工聊天", "結束人工介入", "人工結束"
 ]);
-const AUTO_RIDE_CONFIRMATION_NAMES = new Set(["輝”>Σ", "甯"]);
+const DEFAULT_LINE_TEST_ALLOWED_NAMES = ["輝”>Σ", "甯", "K", "EP"];
+const AUTO_RIDE_CONFIRMATION_NAMES = new Set(DEFAULT_LINE_TEST_ALLOWED_NAMES);
 const PICKUP_ETA_LIMIT_MINUTES = 20;
 const LOCATION_MAX_AGE_MS = 2 * 60 * 1000;
 const ETA_CACHE_MS = 5 * 60 * 1000;
@@ -1676,9 +1677,9 @@ async function forwardAllowedWindowMessage(event) {
   if (event.source?.type !== "user") return;
 
   try {
-    const allowedName = String(process.env.LINE_CAPTURE_ALLOWED_NAME || "輝”>Σ").trim();
+    const allowedNames = getLineCaptureAllowedNames();
     const nickname = await getLineNickname(event);
-    if (nickname !== allowedName) {
+    if (!allowedNames.has(nickname)) {
       console.log(`Skipped LINE capture from window: ${nickname || "unknown"}`);
       return;
     }
@@ -1724,6 +1725,14 @@ function getLineMessageBody(event) {
   if (message.type === "file") return `檔案 ${message.fileName || ""}`.trim();
   if (message.type === "location") return `位置 ${message.title || ""} ${message.address || ""}`.trim();
   return message.type || "未知訊息";
+}
+
+function getLineCaptureAllowedNames() {
+  const configured = String(process.env.LINE_CAPTURE_ALLOWED_NAME || "").trim();
+  const names = configured
+    ? configured.split(/[,，\n]/u).map(name => name.trim()).filter(Boolean)
+    : DEFAULT_LINE_TEST_ALLOWED_NAMES;
+  return new Set(names);
 }
 
 async function getValidatedCapturedRoute(event, body) {
