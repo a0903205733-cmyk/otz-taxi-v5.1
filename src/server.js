@@ -50,6 +50,7 @@ const BOT_RESUME_KEYWORDS = new Set([
   "解除人工介入", "恢復機器人", "開啟機器人",
   "結束手動聊天", "結束人工聊天", "結束人工介入", "人工結束"
 ]);
+const AUTO_RIDE_CONFIRMATION_NAMES = new Set(["輝”>Σ", "甯"]);
 const PICKUP_ETA_LIMIT_MINUTES = 20;
 const LOCATION_MAX_AGE_MS = 2 * 60 * 1000;
 const ETA_CACHE_MS = 5 * 60 * 1000;
@@ -335,6 +336,12 @@ async function handleText(event) {
   }
 
   if (!isFareQuoteRequest) {
+    const nickname = await getLineNickname(event);
+    if (!AUTO_RIDE_CONFIRMATION_NAMES.has(nickname)) {
+      console.log(`Skipped auto ride confirmation for ${nickname || "unknown"}`);
+      return;
+    }
+
     rememberPendingRideConfirmation(event, parsed);
     return reply(
       event.replyToken,
