@@ -707,7 +707,7 @@ async function handleDispatchBotTagged(event, incomingText) {
     return replyMentionUser(
       event.replyToken,
       event.source?.userId || "",
-      nickname || "你",
+      nickname || "回覆者",
       `已紀錄完成 ${orderNo(order.id)}\n` +
         `車牌/顏色/抵達時間：${completion.fourDigits}/${completion.color}/${completion.twoDigits}`
     );
@@ -1686,7 +1686,8 @@ async function reply(replyToken, text) {
 }
 
 async function replyMentionUser(replyToken, userId, label, body) {
-  const mentionLabel = `@${String(label || "你").replace(/\s+/gu, "")}`;
+  const cleanLabel = String(label || "回覆者").replace(/[\r\n]+/gu, " ").trim() || "回覆者";
+  const mentionLabel = `@${cleanLabel}`;
   const text = normalizeLineText(`${mentionLabel} ${body}`);
   if (!userId) return reply(replyToken, text);
 
