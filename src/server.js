@@ -700,7 +700,9 @@ async function handleDispatchBotTagged(event, incomingText) {
         two_digits: completion.twoDigits
       }
     });
-    await notifyCustomer(updated, "complete").catch(error => {
+    await notifyCustomer(updated, "complete", {
+      dispatchCompletion: completion
+    }).catch(error => {
       logLinePushError("Dispatch tag complete customer notification failed", error);
     });
     const nickname = await getLineNickname(event);
@@ -1592,7 +1594,7 @@ async function filterNearbyPickupOrders(driver, orders, { bypassCache = false } 
   return results.filter(Boolean);
 }
 
-async function notifyCustomer(order, action) {
+async function notifyCustomer(order, action, options = {}) {
   if (!order.customer_line_id) return;
 
   let text = "";
@@ -1611,8 +1613,14 @@ async function notifyCustomer(order, action) {
       `🚖 行程已開始\n訂單：${orderNo(order.id)}\n` +
       `祝您一路平安。`;
   } else if (action === "complete") {
+    const dispatchCompletion = options.dispatchCompletion;
+    const completionText = dispatchCompletion?.fourDigits && dispatchCompletion?.color && dispatchCompletion?.twoDigits
+      ? `\n結單資料：${dispatchCompletion.fourDigits}/${dispatchCompletion.color}/${dispatchCompletion.twoDigits}`
+      : "";
     text =
       `✅ 行程已完成\n訂單：${orderNo(order.id)}\n` +
+      completionText +
+      (completionText ? "\n" : "") +
       `感謝使用 OTZ 車隊。`;
   } else if (action === "cancel") {
     text = `訂單 ${orderNo(order.id)} 已取消。`;
