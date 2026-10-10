@@ -1897,15 +1897,15 @@ function withDispatchMentionAll(text) {
 
 function createDispatchTextMessage(text) {
   const normalized = withDispatchMentionAll(text);
+  const body = normalized.replace(/^@All(?:\s|\n|$)/u, "").trimStart();
   return {
-    type: "text",
-    text: normalized,
-    mention: {
-      mentionees: [{
-        index: 0,
-        length: 4,
-        type: "all"
-      }]
+    type: "textV2",
+    text: "{all}\n" + body,
+    substitution: {
+      all: {
+        type: "mention",
+        mentionee: { type: "all" }
+      }
     }
   };
 }
