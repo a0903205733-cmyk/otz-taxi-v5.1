@@ -1629,10 +1629,41 @@ async function notifyCustomer(order, action, options = {}) {
   }
 
   if (text) {
-    await line.pushMessage({
-      to: order.customer_line_id,
-      messages: [{ type: "text", text: normalizeLineText(text) }]
-    });
+    try {
+      await line.pushMessage({
+        to: order.customer_line_id,
+        messages: [{ type: "text", text: normalizeLineText(text) }]
+      });
+    } catch (error) {
+      const details = getLinePushErrorDetails(error);
+      if (details.status === 429) {
+        await notifyManualCustomerReplyNeeded(order, text, details);
+        return;
+      }
+      throw error;
+    }
+  }
+}
+
+async function notifyManualCustomerReplyNeeded(order, text, errorDetails) {
+  const groupIds = getDispatchGroupIds();
+  if (!groupIds.length) return;
+
+  const notice = normalizeLineText([
+    "⚠️ OTZ主帳號訊息額度已滿，請後台人工回覆客人",
+    `訂單：${orderNo(order.id)}`,
+    `客人LINE ID：${order.customer_line_id || "未提供"}`,
+    "",
+    "請複製以下訊息回覆客人：",
+    text,
+    "",
+    `LINE錯誤：${errorDetails.message || "429"}`
+  ].join("\n"));
+
+  try {
+    await pushDispatchLineMessages(groupIds, notice);
+  } catch (error) {
+    logLinePushError("Manual customer reply fallback dispatch failed", error);
   }
 }
 
