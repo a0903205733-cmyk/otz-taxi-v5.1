@@ -973,19 +973,21 @@ app.put("/api/admin/settings", adminAuth, async (req, res) => {
 });
 
 app.post("/api/admin/line/dispatch-test", adminAuth, async (req, res) => {
-  const groupId = String(req.body.groupId || getDispatchGroupId()).trim();
+  const groupIds = req.body.groupId
+    ? [String(req.body.groupId).trim()]
+    : getDispatchGroupIds();
   const text = normalizeLineText(req.body.text || "OTZ 派單群組測試\n60/20/2\n上車地點:測試\n下車地點:測試");
   const accountIndex = Number.isInteger(Number(req.body.accountIndex))
     ? Number(req.body.accountIndex) - 1
     : null;
 
   try {
-    const result = await pushDispatchLineMessage(groupId, text, { accountIndex });
-    res.json({ ok: true, groupId, account: result.name });
+    const results = await pushDispatchLineMessages(groupIds, text, { accountIndex });
+    res.json({ ok: true, groupIds, results });
   } catch (error) {
     const details = getLinePushErrorDetails(error);
     console.error("Dispatch group test push failed:", details);
-    res.status(502).json({ ok: false, groupId, error: details });
+    res.status(502).json({ ok: false, groupIds, error: details });
   }
 });
 
@@ -1590,8 +1592,8 @@ function formatCapturedLineMessage(values) {
 }
 
 async function pushOrderToDispatchGroup(order) {
-  const groupId = getDispatchGroupId();
-  if (!groupId || !order) return false;
+  const groupIds = getDispatchGroupIds();
+  if (!groupIds.length || !order) return false;
 
   const text = normalizeLineText(formatRideRequestTemplate({
     pickup: order.pickup,
@@ -1600,8 +1602,8 @@ async function pushOrderToDispatchGroup(order) {
     luggage: "",
     specialNeeds: ""
   }));
-  const result = await pushDispatchLineMessage(groupId, text);
-  console.log(`Order ${orderNo(order.id)} pushed to dispatch group ${groupId} by ${result.name}`);
+  const results = await pushDispatchLineMessages(groupIds, text);
+  console.log(`Order ${orderNo(order.id)} pushed to dispatch groups ${groupIds.join(",")} by ${results.map(item => item.account).join(",")}`);
   return true;
 }
 
@@ -1614,13 +1616,38 @@ async function dispatchTestOrder(event) {
   ].join("\n"));
 
   try {
-    const result = await pushDispatchLineMessage(getDispatchGroupId(), text, { accountIndex: 0 });
-    console.log(`Test order pushed by ${result.name}`);
+    const results = await pushDispatchLineMessages(getDispatchGroupIds(), text, { accountIndex: 0 });
+    console.log(`Test order pushed to ${results.length} groups`);
     return reply(event.replyToken, "測試單已派出");
   } catch (error) {
     logLinePushError("Test order dispatch failed", error);
     return reply(event.replyToken, "測試單派出失敗，請確認 A1 與派單群組設定");
   }
+}
+
+async function pushDispatchLineMessages(groupIds, text, options = {}) {
+  const ids = [...new Set(groupIds.map(groupId => String(groupId || "").trim()).filter(Boolean))];
+  const results = [];
+  const errors = [];
+
+  for (const groupId of ids) {
+    try {
+      const result = await pushDispatchLineMessage(groupId, text, options);
+      results.push({ groupId, account: result.name });
+    } catch (error) {
+      const details = getLinePushErrorDetails(error);
+      errors.push({ groupId, ...details });
+    }
+  }
+
+  if (errors.length) {
+    const error = new Error("Some LINE dispatch groups failed");
+    error.dispatchErrors = errors;
+    error.results = results;
+    throw error;
+  }
+
+  return results;
 }
 
 async function pushDispatchLineMessage(groupId, text, options = {}) {
@@ -1714,11 +1741,14 @@ function getLinePushErrorDetails(error) {
   };
 }
 
-function getDispatchGroupId() {
+function getDispatchGroupIds() {
   return String(
     process.env.LINE_DISPATCH_GROUP_ID ||
       "Cddc86808ba9af00baf20e85a8029b379"
-  ).trim();
+  )
+    .split(/[,\n\r]+/u)
+    .map(groupId => groupId.trim())
+    .filter(Boolean);
 }
 
 function formatRideRequestTemplate(values) {
