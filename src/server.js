@@ -229,6 +229,9 @@ async function handleLineEvent(event) {
 
 async function handleText(event) {
   const incomingText = String(event.message.text || "").trim();
+  if (incomingText === "測試") {
+    return dispatchTestOrder(event);
+  }
   if (isFareQuoteKeyword(incomingText)) {
     rememberFareQuoteIntent(event);
     return reply(event.replyToken, "請問上下車地點");
@@ -1600,6 +1603,24 @@ async function pushOrderToDispatchGroup(order) {
   const result = await pushDispatchLineMessage(groupId, text);
   console.log(`Order ${orderNo(order.id)} pushed to dispatch group ${groupId} by ${result.name}`);
   return true;
+}
+
+async function dispatchTestOrder(event) {
+  const text = normalizeLineText([
+    "測試單",
+    "60/20/2",
+    "上車點",
+    "下車點"
+  ].join("\n"));
+
+  try {
+    const result = await pushDispatchLineMessage(getDispatchGroupId(), text, { accountIndex: 0 });
+    console.log(`Test order pushed by ${result.name}`);
+    return reply(event.replyToken, "測試單已派出");
+  } catch (error) {
+    logLinePushError("Test order dispatch failed", error);
+    return reply(event.replyToken, "測試單派出失敗，請確認 A1 與派單群組設定");
+  }
 }
 
 async function pushDispatchLineMessage(groupId, text, options = {}) {
