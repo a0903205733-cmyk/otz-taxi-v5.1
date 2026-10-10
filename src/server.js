@@ -1873,7 +1873,7 @@ async function pushDispatchLineMessage(groupId, text, options = {}) {
     try {
       await account.client.pushMessage({
         to: groupId,
-        messages: [{ type: "text", text }]
+        messages: [createDispatchTextMessage(text)]
       });
       if (forcedIndex === null) dispatchTokenCursor = (index + 1) % accounts.length;
       return { name: account.name, index };
@@ -1893,6 +1893,21 @@ function withDispatchMentionAll(text) {
   const normalized = normalizeLineText(text);
   if (/^@All(?:\s|\n|$)/u.test(normalized)) return normalized;
   return `@All\n${normalized}`;
+}
+
+function createDispatchTextMessage(text) {
+  const normalized = withDispatchMentionAll(text);
+  return {
+    type: "text",
+    text: normalized,
+    mention: {
+      mentionees: [{
+        index: 0,
+        length: 4,
+        type: "all"
+      }]
+    }
+  };
 }
 
 function getDispatchLineAccounts() {
