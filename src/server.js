@@ -772,7 +772,7 @@ function parseDispatchCompletionSegment(text, colorPattern) {
 function getRideSearchNotice() {
   return [
     "已開始尋車～請稍等",
-    "請您耐心等候10~15分鐘",
+    "請您耐心等候5~10分鐘",
     "",
     "人工找車需要時間請勿催促",
     "提供下車點能提高司機承接率",
