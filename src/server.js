@@ -230,7 +230,7 @@ async function handleLineEvent(event) {
 async function handleText(event) {
   const incomingText = String(event.message.text || "").trim();
   if (/^測試派單(?:\s|$)/u.test(incomingText)) {
-    return dispatchTestOrder(event);
+    return dispatchTestOrder(event, incomingText);
   }
   if (isFareQuoteKeyword(incomingText)) {
     rememberFareQuoteIntent(event);
@@ -1607,13 +1607,16 @@ async function pushOrderToDispatchGroup(order) {
   return true;
 }
 
-async function dispatchTestOrder(event) {
-  const text = normalizeLineText([
-    "測試單",
-    "60/20/2",
-    "上車點",
-    "下車點"
-  ].join("\n"));
+async function dispatchTestOrder(event, incomingText = "") {
+  const text = normalizeLineText(
+    String(incomingText || "").trim() || [
+      "測試派單",
+      "測試單",
+      "60/20/2",
+      "上車點",
+      "下車點"
+    ].join("\n")
+  );
 
   try {
     const results = await pushDispatchLineMessages(getDispatchGroupIds(), text, { accountIndex: 0 });
