@@ -1608,15 +1608,16 @@ async function pushOrderToDispatchGroup(order) {
 }
 
 async function dispatchTestOrder(event, incomingText = "") {
-  const text = normalizeLineText(
-    String(incomingText || "").trim() || [
-      "測試派單",
-      "測試單",
-      "60/20/2",
-      "上車點",
-      "下車點"
-    ].join("\n")
-  );
+  const routeText = String(incomingText || "")
+    .replace(/^測試派單[，,、:：\s]*/u, "")
+    .trim();
+  const parsed = parseRideRequest(routeText);
+  const text = normalizeLineText([
+    "測試單",
+    "60/20/2",
+    parsed.pickup || "上車點",
+    parsed.destination || "下車點"
+  ].join("\n"));
 
   try {
     const results = await pushDispatchLineMessages(getDispatchGroupIds(), text, { accountIndex: 0 });
