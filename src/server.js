@@ -696,8 +696,10 @@ async function handleDispatchBotTagged(event, incomingText) {
         source: event.source,
         raw_text: incomingText,
         four_digits: completion.fourDigits,
+        plate: completion.fourDigits,
         color: completion.color,
-        two_digits: completion.twoDigits
+        two_digits: completion.twoDigits,
+        eta_minutes: completion.twoDigits
       }
     });
     await notifyCustomer(updated, "complete", {
@@ -708,7 +710,8 @@ async function handleDispatchBotTagged(event, incomingText) {
     const nickname = await getLineNickname(event);
     return reply(
       event.replyToken,
-      `${nickname ? `@${nickname} ` : ""}已紀錄完成 ${orderNo(order.id)}：${completion.fourDigits} ${completion.color} ${completion.twoDigits}`
+      `${nickname ? `@${nickname} ` : ""}已紀錄完成 ${orderNo(order.id)}\n` +
+        `車牌/顏色/抵達時間：${completion.fourDigits}/${completion.color}/${completion.twoDigits}`
     );
   } catch (error) {
     console.error("Dispatch bot tag completion failed:", error);
@@ -1618,7 +1621,7 @@ async function notifyCustomer(order, action, options = {}) {
       ? `車牌/顏色/抵達時間：${dispatchCompletion.fourDigits}/${dispatchCompletion.color}/${dispatchCompletion.twoDigits}\n`
       : "";
     text =
-      `訂單：${orderNo(order.id)}\n` +
+      `提供司機車訊\n訂單：${orderNo(order.id)}\n` +
       completionText +
       `感謝使用 OTZ 車隊。`;
   } else if (action === "cancel") {
