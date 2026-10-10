@@ -322,31 +322,38 @@ async function handleText(event) {
   }
 
   try {
-    if (!parsed.destination) {
-      console.log("Ignored pickup-only ride request");
-      return;
-    }
     const schedule = classifyRideSchedule(parsed.rideTime);
-    const route = await getRoute(
-      parsed.pickup,
-      parsed.destination,
-      process.env.GOOGLE_MAPS_API_KEY,
-      settings
-    );
+    const hasDestination = Boolean(parsed.destination);
+    const destination = hasDestination ? parsed.destination : "尚未提供";
+    const route = hasDestination
+      ? await getRoute(
+        parsed.pickup,
+        destination,
+        process.env.GOOGLE_MAPS_API_KEY,
+        settings
+      )
+      : {
+        distanceKm: 0,
+        durationMin: 0,
+        originLocation: null,
+        destinationLocation: null
+      };
 
     const toll = Number(settings.default_toll ?? process.env.DEFAULT_TOLL ?? 0);
-    const fare = isDonggangTownTrip(parsed.pickup, parsed.destination, route)
+    const fare = hasDestination && isDonggangTownTrip(parsed.pickup, destination, route)
       ? calculateDonggangTownFare()
-      : calculateFare(route.distanceKm, route.durationMin, toll, settings);
+      : hasDestination
+        ? calculateFare(route.distanceKm, route.durationMin, toll, settings)
+        : calculateFare(0, 0, 0, settings);
     const areas = String(process.env.SERVICE_AREAS || "東港,潮州,林邊,佳冬,枋寮").split(",");
     const inServiceArea = areas.some(area =>
-      `${parsed.pickup} ${parsed.destination}`.includes(area.trim())
+      `${parsed.pickup} ${destination}`.includes(area.trim())
     );
 
     const order = await createOrder({
       customer_line_id: event.source?.userId || null,
       pickup: parsed.pickup,
-      destination: parsed.destination,
+      destination,
       ride_time: parsed.rideTime || null,
       is_reservation: schedule.isReservation,
       scheduled_at: schedule.scheduledAt,
@@ -375,7 +382,7 @@ async function handleText(event) {
       return reply(
         event.replyToken,
         `✅ 已建立叫車單\n訂單：${orderNo(order.id)}\n` +
-          `${formatRideRequestTemplate({ pickup: parsed.pickup, destination: parsed.destination })}\n` +
+          `${formatRideRequestTemplate({ pickup: parsed.pickup, destination })}\n` +
           (dispatched
             ? "為您尋找司機 請稍等 有車訊會馬上通知您"
             : "⚠️ 群組派單失敗，請聯絡客服確認 LINE 群組設定")
@@ -1616,7 +1623,7 @@ async function dispatchTestOrder(event, incomingText = "") {
     "測試單",
     "60/20/2",
     `上車地點:${parsed.pickup || "上車點"}`,
-    `下車地點:${parsed.destination || "下車點"}`
+    `下車地點:${parsed.destination || ""}`
   ].join("\n"));
 
   try {
