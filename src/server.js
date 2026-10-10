@@ -704,9 +704,11 @@ async function handleDispatchBotTagged(event, incomingText) {
       logLinePushError("Dispatch tag complete customer notification failed", error);
     });
     const nickname = await getLineNickname(event);
-    return reply(
+    return replyMentionUser(
       event.replyToken,
-      `${nickname ? `@${nickname} ` : ""}已紀錄完成 ${orderNo(order.id)}\n` +
+      event.source?.userId || "",
+      nickname || "你",
+      `已紀錄完成 ${orderNo(order.id)}\n` +
         `車牌/顏色/抵達時間：${completion.fourDigits}/${completion.color}/${completion.twoDigits}`
     );
   } catch (error) {
@@ -1680,6 +1682,29 @@ async function notifyManualCustomerReplyNeeded(order, text, errorDetails) {
 
 async function reply(replyToken, text) {
   const messages = [{ type: "text", text: normalizeLineText(text) }];
+  return replyMessages(replyToken, messages);
+}
+
+async function replyMentionUser(replyToken, userId, label, body) {
+  const mentionLabel = `@${String(label || "你").replace(/\s+/gu, "")}`;
+  const text = normalizeLineText(`${mentionLabel} ${body}`);
+  if (!userId) return reply(replyToken, text);
+
+  return replyMessages(replyToken, [{
+    type: "text",
+    text,
+    mention: {
+      mentionees: [{
+        index: 0,
+        length: mentionLabel.length,
+        type: "user",
+        userId
+      }]
+    }
+  }]);
+}
+
+async function replyMessages(replyToken, messages) {
   const errors = [];
 
   for (const account of getReplyLineAccounts()) {
