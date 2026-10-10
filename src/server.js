@@ -1615,12 +1615,11 @@ async function notifyCustomer(order, action, options = {}) {
   } else if (action === "complete") {
     const dispatchCompletion = options.dispatchCompletion;
     const completionText = dispatchCompletion?.fourDigits && dispatchCompletion?.color && dispatchCompletion?.twoDigits
-      ? `\n結單資料：${dispatchCompletion.fourDigits}/${dispatchCompletion.color}/${dispatchCompletion.twoDigits}`
+      ? `車牌/顏色/抵達時間：${dispatchCompletion.fourDigits}/${dispatchCompletion.color}/${dispatchCompletion.twoDigits}\n`
       : "";
     text =
-      `提供司機車訊\n訂單：${orderNo(order.id)}\n` +
+      `訂單：${orderNo(order.id)}\n` +
       completionText +
-      (completionText ? "\n" : "") +
       `感謝使用 OTZ 車隊。`;
   } else if (action === "cancel") {
     text = `訂單 ${orderNo(order.id)} 已取消。`;
