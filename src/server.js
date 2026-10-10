@@ -229,7 +229,7 @@ async function handleLineEvent(event) {
 
 async function handleText(event) {
   const incomingText = String(event.message.text || "").trim();
-  if (incomingText === "測試派單") {
+  if (/^測試派單(?:\s|$)/u.test(incomingText)) {
     return dispatchTestOrder(event);
   }
   if (isFareQuoteKeyword(incomingText)) {
