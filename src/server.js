@@ -439,7 +439,7 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings) 
         `✅ 已建立叫車單\n訂單：${orderNo(order.id)}\n` +
           `${formatRideRequestTemplate({ pickup: parsed.pickup, destination })}\n` +
           (dispatched
-            ? "為您尋找司機 請稍等 有車訊會馬上通知您"
+            ? getRideSearchNotice()
             : "⚠️ 群組派單失敗，請聯絡客服確認 LINE 群組設定")
       );
     }
@@ -649,7 +649,7 @@ async function handlePostback(event) {
         event.replyToken,
         `✅ 叫車已確認\n訂單：${orderNo(id)}\n已進入派單系統\n` +
           (dispatched
-            ? "為您尋找司機 請稍等 有車訊會馬上通知您"
+            ? getRideSearchNotice()
             : "⚠️ 群組派單失敗，請聯絡客服確認 LINE 群組設定")
       );
     }
@@ -771,6 +771,21 @@ function parseDispatchCompletionSegment(text, colorPattern) {
     color: "",
     twoDigits: ""
   };
+}
+
+function getRideSearchNotice() {
+  return [
+    "已開始尋車～請稍等",
+    "請您耐心等候10~15分鐘",
+    "",
+    "人工找車需要時間請勿催促",
+    "提供下車點能提高司機承接率",
+    "配對到車輛會請司機直接出發",
+    "不需要車車請主動告知取消",
+    "",
+    "➪如有攜帶寵物、5位以上乘客、或其他需求",
+    "請提前告知避免司機到場無法承載而產生空趟"
+  ].join("\n");
 }
 
 app.use(express.json());
