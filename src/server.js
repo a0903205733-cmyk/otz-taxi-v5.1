@@ -717,18 +717,44 @@ function parseDispatchCompletionText(text) {
   const source = String(text || "");
   const orderMatch = source.match(/OTZ[-\s]?0*(\d{1,6})/iu) || source.match(/訂單[：:\s#]*0*(\d{1,6})/u);
   const colorPattern = "(黑色|白色|灰色|銀色|紅色|藍色|綠色|黃色|金色|橘色|紫色|棕色|咖啡色|粉紅色|黑|白|灰|銀|紅|藍|綠|黃|金|橘|紫|棕|咖啡|粉紅)";
-  const completionMatch = source.match(new RegExp(`(?<!\\d)(\\d{4})(?!\\d)[\\s/，,、-]*${colorPattern}[\\s/，,、-]*(\\d{2})(?!\\d)`, "u"));
   const sanitized = source
     .replace(/60\s*\/\s*20\s*\/\s*2/gu, " ")
     .replace(/OTZ[-\s]?0*\d{1,6}/giu, " ")
     .replace(/訂單[：:\s#]*0*\d{1,6}/gu, " ");
-  const colorMatch = sanitized.match(new RegExp(colorPattern, "u"));
-  const digitMatches = [...sanitized.matchAll(/(?<!\d)(\d{2,4})(?!\d)/gu)].map(match => match[1]);
+  const completion = parseDispatchCompletionSegment(sanitized, colorPattern);
   return {
     orderId: orderMatch ? Number(orderMatch[1]) : null,
-    fourDigits: completionMatch?.[1] || digitMatches.find(value => value.length === 4) || "",
-    color: completionMatch?.[2] || (colorMatch ? colorMatch[1] : ""),
-    twoDigits: completionMatch?.[3] || digitMatches.find(value => value.length === 2) || ""
+    fourDigits: completion.fourDigits,
+    color: completion.color,
+    twoDigits: completion.twoDigits
+  };
+}
+
+function parseDispatchCompletionSegment(text, colorPattern) {
+  const colorRegex = new RegExp(colorPattern, "u");
+  const segments = String(text || "")
+    .split(/[\r\n]+/u)
+    .map(segment => segment.trim())
+    .filter(Boolean);
+
+  for (const segment of segments) {
+    const colorMatch = segment.match(colorRegex);
+    const digitMatches = [...segment.matchAll(/(?<!\d)(\d{2,4})(?!\d)/gu)].map(match => match[1]);
+    const fourDigits = digitMatches.find(value => value.length === 4) || "";
+    const twoDigits = digitMatches.find(value => value.length === 2) || "";
+    if (fourDigits && colorMatch && twoDigits) {
+      return {
+        fourDigits,
+        color: colorMatch[1],
+        twoDigits
+      };
+    }
+  }
+
+  return {
+    fourDigits: "",
+    color: "",
+    twoDigits: ""
   };
 }
 
