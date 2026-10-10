@@ -438,9 +438,7 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings) 
         event.replyToken,
         `✅ 已建立叫車單\n訂單：${orderNo(order.id)}\n` +
           `${formatRideRequestTemplate({ pickup: parsed.pickup, destination })}\n` +
-          (dispatched
-            ? getRideSearchNotice()
-            : "⚠️ 群組派單失敗，請聯絡客服確認 LINE 群組設定")
+          getRideSearchNotice()
       );
     }
 
@@ -648,9 +646,7 @@ async function handlePostback(event) {
       return reply(
         event.replyToken,
         `✅ 叫車已確認\n訂單：${orderNo(id)}\n已進入派單系統\n` +
-          (dispatched
-            ? getRideSearchNotice()
-            : "⚠️ 群組派單失敗，請聯絡客服確認 LINE 群組設定")
+          getRideSearchNotice()
       );
     }
 
