@@ -674,6 +674,10 @@ async function handleDispatchBotTagged(event, incomingText) {
 
   try {
     const order = await getOrder(completion.orderId);
+    if (order.status === "completed" || order.completed_at) {
+      return reply(event.replyToken, `此訂單已記錄完成 ${orderNo(order.id)}，不接受第二位回覆。`);
+    }
+
     const updated = await updateOrder(order.id, {
       status: "completed",
       completed_at: new Date().toISOString()
