@@ -1384,11 +1384,24 @@ async function notifyCustomer(order, action) {
   }
 }
 
-function reply(replyToken, text) {
-  return line.replyMessage({
-    replyToken,
-    messages: [{ type: "text", text: normalizeLineText(text) }]
-  });
+async function reply(replyToken, text) {
+  const messages = [{ type: "text", text: normalizeLineText(text) }];
+  const errors = [];
+
+  for (const account of getReplyLineAccounts()) {
+    try {
+      await account.client.replyMessage({ replyToken, messages });
+      return;
+    } catch (error) {
+      const details = getLinePushErrorDetails(error);
+      errors.push({ account: account.name, ...details });
+      console.error(`LINE reply failed by ${account.name}:`, details);
+    }
+  }
+
+  const error = new Error("All LINE reply accounts failed");
+  error.dispatchErrors = errors;
+  throw error;
 }
 
 function replyLineSourceId(event) {
@@ -1637,8 +1650,34 @@ function getDispatchLineAccounts() {
 
   return tokens.map((token, index) => ({
     name: `dispatch-${index + 1}`,
+    token,
     client: new messagingApi.MessagingApiClient({ channelAccessToken: token })
   }));
+}
+
+function getReplyLineAccounts() {
+  const tokens = [
+    { name: "main", token: process.env.LINE_CHANNEL_ACCESS_TOKEN },
+    ...getDispatchLineAccounts().map(account => ({
+      name: account.name,
+      token: account.token
+    }))
+  ];
+  const seen = new Set();
+  return tokens
+    .map(account => ({
+      name: account.name,
+      token: String(account.token || "").trim()
+    }))
+    .filter(account => {
+      if (!account.token || seen.has(account.token)) return false;
+      seen.add(account.token);
+      return true;
+    })
+    .map(account => ({
+      name: account.name,
+      client: new messagingApi.MessagingApiClient({ channelAccessToken: account.token })
+    }));
 }
 
 function logLinePushError(label, error) {
