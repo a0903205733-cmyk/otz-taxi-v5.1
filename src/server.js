@@ -986,6 +986,24 @@ app.post("/api/admin/line/dispatch-test", adminAuth, async (req, res) => {
   }
 });
 
+app.post("/api/admin/line/main-push-test", adminAuth, async (req, res) => {
+  const to = String(req.body.to || "").trim();
+  const text = normalizeLineText(req.body.text || "OTZ 主帳號測試");
+  if (!to) return res.status(400).json({ ok: false, error: "缺少 to" });
+
+  try {
+    await line.pushMessage({
+      to,
+      messages: [{ type: "text", text }]
+    });
+    res.json({ ok: true, to });
+  } catch (error) {
+    const details = getLinePushErrorDetails(error);
+    console.error("Main LINE push test failed:", details);
+    res.status(502).json({ ok: false, to, error: details });
+  }
+});
+
 app.post("/api/admin/line/resume-all", adminAuth, async (_req, res) => {
   try {
     for (const timer of humanHandoffTimers.values()) clearTimeout(timer);
