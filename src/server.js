@@ -36,10 +36,12 @@ const realtimeClients = new Set();
 const pickupEtaCache = new Map();
 const humanHandoffTimers = new Map();
 const dailyFareQuoteIntents = new Map();
+const pendingRideConfirmations = new Map();
 const recentLineWebhookEvents = [];
 const DEFAULT_ADMIN_TOKEN = "0908160150";
 const LINE_MUTED_SOURCES_SETTING = "muted_line_sources";
 const HUMAN_HANDOFF_AUTO_RESUME_MS = 3 * 60 * 1000;
+const RIDE_CONFIRMATION_TTL_MS = 5 * 60 * 1000;
 const HUMAN_HANDOFF_KEYWORDS = new Set([
   "人工介入", "轉人工", "人工客服",
   "手動聊天", "開始手動聊天", "人工聊天", "開始人工聊天"
@@ -229,6 +231,17 @@ async function handleLineEvent(event) {
 
 async function handleText(event) {
   const incomingText = String(event.message.text || "").trim();
+  const rideConfirmation = getPendingRideConfirmation(event);
+  if (rideConfirmation && incomingText === "1") {
+    clearPendingRideConfirmation(event);
+    const settings = await listSettings();
+    return createLineRideOrder(event, rideConfirmation.parsed, false, settings);
+  }
+  if (rideConfirmation && incomingText === "2") {
+    clearPendingRideConfirmation(event);
+    return reply(event.replyToken, "已取消叫車。");
+  }
+
   if (/^測試派單(?:\s|$)/u.test(incomingText)) {
     return dispatchTestOrder(event, incomingText);
   }
@@ -321,6 +334,22 @@ async function handleText(event) {
     );
   }
 
+  if (!isFareQuoteRequest) {
+    rememberPendingRideConfirmation(event, parsed);
+    return reply(
+      event.replyToken,
+      "偵測到叫車地址：\n" +
+        `${formatRideRequestTemplate({ pickup: parsed.pickup, destination: parsed.destination || "尚未提供" })}\n` +
+        "是否要叫車？\n" +
+        "請輸入 1：要叫車\n" +
+        "請輸入 2：不叫車"
+    );
+  }
+
+  return createLineRideOrder(event, parsed, isFareQuoteRequest, settings);
+}
+
+async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings) {
   try {
     const schedule = classifyRideSchedule(parsed.rideTime);
     const hasDestination = Boolean(parsed.destination);
@@ -474,6 +503,49 @@ function clearFareQuoteIntent(event) {
 function hasFareQuoteIntentToday(event) {
   const key = getDailyFareQuoteIntentKey(event);
   return key ? dailyFareQuoteIntents.has(key) : false;
+}
+
+function rememberPendingRideConfirmation(event, parsed) {
+  const key = getRideConfirmationKey(event);
+  if (!key) return;
+  cleanupPendingRideConfirmations();
+  pendingRideConfirmations.set(key, {
+    parsed: { ...parsed },
+    createdAt: Date.now()
+  });
+}
+
+function getPendingRideConfirmation(event) {
+  const key = getRideConfirmationKey(event);
+  if (!key) return null;
+  cleanupPendingRideConfirmations();
+  const pending = pendingRideConfirmations.get(key);
+  if (!pending) return null;
+  if (Date.now() - pending.createdAt > RIDE_CONFIRMATION_TTL_MS) {
+    pendingRideConfirmations.delete(key);
+    return null;
+  }
+  return pending;
+}
+
+function clearPendingRideConfirmation(event) {
+  const key = getRideConfirmationKey(event);
+  if (key) pendingRideConfirmations.delete(key);
+}
+
+function cleanupPendingRideConfirmations() {
+  const now = Date.now();
+  for (const [key, pending] of pendingRideConfirmations.entries()) {
+    if (now - pending.createdAt > RIDE_CONFIRMATION_TTL_MS) {
+      pendingRideConfirmations.delete(key);
+    }
+  }
+}
+
+function getRideConfirmationKey(event) {
+  const sourceKey = getLineSourceKey(event);
+  const userId = event?.source?.userId || "";
+  return sourceKey ? `${sourceKey}:${userId}` : "";
 }
 
 function getDailyFareQuoteIntentKey(event) {
