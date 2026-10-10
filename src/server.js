@@ -1618,7 +1618,7 @@ async function notifyCustomer(order, action, options = {}) {
       ? `\n結單資料：${dispatchCompletion.fourDigits}/${dispatchCompletion.color}/${dispatchCompletion.twoDigits}`
       : "";
     text =
-      `✅ 行程已完成\n訂單：${orderNo(order.id)}\n` +
+      `提供司機車訊\n訂單：${orderNo(order.id)}\n` +
       completionText +
       (completionText ? "\n" : "") +
       `感謝使用 OTZ 車隊。`;
