@@ -801,7 +801,7 @@ async function handleDispatchBotTagged(event, incomingText) {
     return reply(event.replyToken, "請在標記訊息中包含訂單編號，例如 OTZ-000123。");
   }
   if (!completion.fourDigits || !completion.color || !completion.twoDigits) {
-    return reply(event.replyToken, "資料不完整，請提供四位數字、顏色、一至兩位數字。");
+    return reply(event.replyToken, "資料不完整，請提供四位數字、顏色、一至兩位數字或準時。");
   }
 
   try {
@@ -886,12 +886,14 @@ function parseDispatchCompletionSegment(text, colorPattern) {
     const colorMatch = segment.match(colorRegex);
     const digitMatches = [...segment.matchAll(/(?<!\d)(\d{1,4})(?!\d)/gu)].map(match => match[1]);
     const fourDigits = digitMatches.find(value => value.length === 4) || "";
-    const twoDigits = digitMatches.find(value => value.length <= 2) || "";
-    if (fourDigits && colorMatch && twoDigits) {
+    const arrivalValue = segment.includes("準時")
+      ? "準時"
+      : digitMatches.find(value => value.length <= 2) || "";
+    if (fourDigits && colorMatch && arrivalValue) {
       return {
         fourDigits,
         color: colorMatch[1],
-        twoDigits
+        twoDigits: arrivalValue
       };
     }
   }
