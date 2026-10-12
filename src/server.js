@@ -1957,17 +1957,43 @@ async function dispatchTestOrder(event, incomingText = "") {
     .replace(/^測試派單[，,、:：\s]*/u, "")
     .trim();
   const parsed = parseRideRequest(routeText);
+  const settings = await listSettings();
+  const pickup = parsed.pickup || "上車點";
+  const destination = parsed.destination || "下車點";
+  const fare = calculateFare(0, 0, 0, settings);
+  const order = await createOrder({
+    customer_line_id: null,
+    pickup,
+    destination,
+    ride_time: parsed.rideTime || null,
+    is_reservation: false,
+    scheduled_at: null,
+    passengers: parsed.passengers,
+    pickup_latitude: null,
+    pickup_longitude: null,
+    distance_km: 0,
+    duration_min: 0,
+    base_fare: fare.baseFare,
+    mileage_fare: 0,
+    time_fare: 0,
+    toll: 0,
+    night_surcharge: 0,
+    estimated_fare: fare.estimatedFare,
+    in_service_area: true,
+    status: "pending"
+  });
   const text = normalizeLineText([
     "測試單",
+    `訂單:${orderNo(order.id)}`,
     "60/20/2",
-    `上車地點:${parsed.pickup || "上車點"}`,
-    `下車地點:${parsed.destination || ""}`
+    `上車地點:${pickup}`,
+    `下車地點:${destination}`
   ].join("\n"));
 
   try {
     const results = await pushDispatchLineMessages(getDispatchGroupIds(), text);
     console.log(`Test order pushed to ${results.length} groups`);
-    return reply(event.replyToken, "測試單已派出");
+    return reply(event.replyToken, `測試單已派出\n訂單：${orderNo(order.id)}`);
   } catch (error) {
     logLinePushError("Test order dispatch failed", error);
     return reply(event.replyToken, "測試單派出失敗，請確認 A1~A4 與派單群組設定");
