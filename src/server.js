@@ -1650,33 +1650,15 @@ async function notifyCustomer(order, action, options = {}) {
     } catch (error) {
       const details = getLinePushErrorDetails(error);
       if (details.status === 429) {
-        await notifyManualCustomerReplyNeeded(order, text, details);
+        console.warn("Customer LINE push skipped because OTZ monthly quota is full.", {
+          order: orderNo(order.id),
+          customer_line_id: order.customer_line_id,
+          error: details.message
+        });
         return;
       }
       throw error;
     }
-  }
-}
-
-async function notifyManualCustomerReplyNeeded(order, text, errorDetails) {
-  const groupIds = getDispatchGroupIds();
-  if (!groupIds.length) return;
-
-  const notice = normalizeLineText([
-    "⚠️ OTZ主帳號訊息額度已滿，請後台人工回覆客人",
-    `訂單：${orderNo(order.id)}`,
-    `客人LINE ID：${order.customer_line_id || "未提供"}`,
-    "",
-    "請複製以下訊息回覆客人：",
-    text,
-    "",
-    `LINE錯誤：${errorDetails.message || "429"}`
-  ].join("\n"));
-
-  try {
-    await pushDispatchLineMessages(groupIds, notice);
-  } catch (error) {
-    logLinePushError("Manual customer reply fallback dispatch failed", error);
   }
 }
 
