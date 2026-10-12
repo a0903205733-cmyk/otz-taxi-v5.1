@@ -37,13 +37,17 @@ const pickupEtaCache = new Map();
 const humanHandoffTimers = new Map();
 const dailyFareQuoteIntents = new Map();
 const pendingRideConfirmations = new Map();
+const pendingDispatchSearchPrompts = new Map();
 const recentRideDispatches = new Map();
+const dispatchSearchTimers = new Map();
 const recentLineWebhookEvents = [];
 const DEFAULT_ADMIN_TOKEN = "0908160150";
 const LINE_MUTED_SOURCES_SETTING = "muted_line_sources";
 const HUMAN_HANDOFF_AUTO_RESUME_MS = 3 * 60 * 1000;
 const RIDE_CONFIRMATION_TTL_MS = 5 * 60 * 1000;
 const RECENT_RIDE_DISPATCH_TTL_MS = 5 * 60 * 1000;
+const DISPATCH_SEARCH_NOTICE_MS = 10 * 60 * 1000;
+const DISPATCH_SEARCH_PROMPT_TTL_MS = 30 * 60 * 1000;
 const HUMAN_HANDOFF_KEYWORDS = new Set([
   "人工介入", "轉人工", "人工客服",
   "手動聊天", "開始手動聊天", "人工聊天", "開始人工聊天"
@@ -241,6 +245,14 @@ async function handleText(event) {
   const incomingText = String(event.message.text || "").trim();
   if (isDispatchBotTagged(event, incomingText)) {
     return handleDispatchBotTagged(event, incomingText);
+  }
+
+  const dispatchSearchPrompt = getPendingDispatchSearchPrompt(event);
+  if (dispatchSearchPrompt && incomingText === "1") {
+    return continueDispatchSearch(event, dispatchSearchPrompt);
+  }
+  if (dispatchSearchPrompt && incomingText === "2") {
+    return cancelDispatchSearch(event, dispatchSearchPrompt);
   }
 
   const rideConfirmation = getPendingRideConfirmation(event);
@@ -598,6 +610,124 @@ function cleanupPendingRideConfirmations() {
   }
 }
 
+function scheduleDispatchSearchNotice(order) {
+  if (!order?.id || !order.customer_line_id) return;
+  clearDispatchSearchPromptForOrder(order.id);
+
+  const timer = setTimeout(async () => {
+    dispatchSearchTimers.delete(order.id);
+    try {
+      const latestOrder = await getOrder(order.id);
+      if (latestOrder.status !== "pending" || latestOrder.completed_at || latestOrder.cancelled_at) {
+        return;
+      }
+      rememberPendingDispatchSearchPrompt(latestOrder);
+      await notifyCustomer(latestOrder, "dispatch_search_delay");
+    } catch (error) {
+      logLinePushError("Dispatch search delay customer notification failed", error);
+    }
+  }, DISPATCH_SEARCH_NOTICE_MS);
+
+  dispatchSearchTimers.set(order.id, timer);
+}
+
+function rememberPendingDispatchSearchPrompt(order) {
+  const key = getLineCustomerKey(order.customer_line_id);
+  if (!key || !order?.id) return;
+  cleanupPendingDispatchSearchPrompts();
+  pendingDispatchSearchPrompts.set(key, {
+    orderId: order.id,
+    createdAt: Date.now()
+  });
+}
+
+function getPendingDispatchSearchPrompt(event) {
+  const key = getLineCustomerKey(event?.source?.userId);
+  if (!key) return null;
+  cleanupPendingDispatchSearchPrompts();
+  const pending = pendingDispatchSearchPrompts.get(key);
+  if (!pending) return null;
+  if (Date.now() - pending.createdAt > DISPATCH_SEARCH_PROMPT_TTL_MS) {
+    pendingDispatchSearchPrompts.delete(key);
+    return null;
+  }
+  return pending;
+}
+
+function clearPendingDispatchSearchPrompt(event) {
+  const key = getLineCustomerKey(event?.source?.userId);
+  if (key) pendingDispatchSearchPrompts.delete(key);
+}
+
+function clearDispatchSearchPromptForOrder(orderId) {
+  if (!orderId) return;
+  const timer = dispatchSearchTimers.get(orderId);
+  if (timer) clearTimeout(timer);
+  dispatchSearchTimers.delete(orderId);
+  for (const [key, pending] of pendingDispatchSearchPrompts.entries()) {
+    if (pending.orderId === orderId) pendingDispatchSearchPrompts.delete(key);
+  }
+}
+
+function cleanupPendingDispatchSearchPrompts() {
+  const now = Date.now();
+  for (const [key, pending] of pendingDispatchSearchPrompts.entries()) {
+    if (now - pending.createdAt > DISPATCH_SEARCH_PROMPT_TTL_MS) {
+      pendingDispatchSearchPrompts.delete(key);
+    }
+  }
+}
+
+function getLineCustomerKey(userId) {
+  const value = String(userId || "").trim();
+  return value ? `user:${value}` : "";
+}
+
+async function continueDispatchSearch(event, pending) {
+  clearPendingDispatchSearchPrompt(event);
+  try {
+    const order = await getOrder(pending.orderId);
+    if (order.status !== "pending" || order.completed_at || order.cancelled_at) {
+      clearDispatchSearchPromptForOrder(order.id);
+      return reply(event.replyToken, `訂單 ${orderNo(order.id)} 已處理。`);
+    }
+    scheduleDispatchSearchNotice(order);
+    return reply(event.replyToken, "已收到，會繼續為您尋車。");
+  } catch (error) {
+    console.error("Continue dispatch search failed:", error);
+    return reply(event.replyToken, "目前無法更新尋車狀態，請稍後再試。");
+  }
+}
+
+async function cancelDispatchSearch(event, pending) {
+  clearPendingDispatchSearchPrompt(event);
+  try {
+    const order = await getOrder(pending.orderId);
+    clearDispatchSearchPromptForOrder(order.id);
+    if (order.status === "completed" || order.completed_at) {
+      return reply(event.replyToken, `訂單 ${orderNo(order.id)} 已完成。`);
+    }
+    if (order.status === "cancelled" || order.cancelled_at) {
+      return reply(event.replyToken, `訂單 ${orderNo(order.id)} 已取消。`);
+    }
+    await updateOrder(order.id, {
+      status: "cancelled",
+      cancelled_at: new Date().toISOString()
+    });
+    await createAuditLog({
+      actor_type: "customer",
+      action: "order.cancel_dispatch_search",
+      entity_type: "order",
+      entity_id: String(order.id),
+      details: { source: event.source }
+    });
+    return reply(event.replyToken, `已取消訂單 ${orderNo(order.id)}。`);
+  } catch (error) {
+    console.error("Cancel dispatch search failed:", error);
+    return reply(event.replyToken, "目前無法取消訂單，請稍後再試。");
+  }
+}
+
 function getRideConfirmationKey(event) {
   const sourceKey = getLineSourceKey(event);
   const userId = event?.source?.userId || "";
@@ -651,6 +781,7 @@ async function handlePostback(event) {
     }
 
     if (action === "cancel") {
+      clearDispatchSearchPromptForOrder(id);
       await updateOrder(id, {
         status: "cancelled",
         cancelled_at: new Date().toISOString()
@@ -679,6 +810,7 @@ async function handleDispatchBotTagged(event, incomingText) {
       return reply(event.replyToken, `此訂單已記錄完成 ${orderNo(order.id)}，不接受第二位回覆。`);
     }
 
+    clearDispatchSearchPromptForOrder(order.id);
     const updated = await updateOrder(order.id, {
       status: "completed",
       completed_at: new Date().toISOString()
@@ -1639,6 +1771,13 @@ async function notifyCustomer(order, action, options = {}) {
       `感謝使用 OTZ 車隊。`;
   } else if (action === "cancel") {
     text = `訂單 ${orderNo(order.id)} 已取消。`;
+  } else if (action === "dispatch_search_delay") {
+    text = [
+      "不好意思目前沒有尋到",
+      "正在盡力替您尋車",
+      "如需繼續尋車請打\"1\"",
+      "如需取消此次行程請打\"2\""
+    ].join("\n");
   }
 
   if (text) {
@@ -1949,6 +2088,7 @@ async function pushOrderToDispatchGroup(order) {
   ].join("\n"));
   const results = await pushDispatchLineMessages(groupIds, text);
   console.log(`Order ${orderNo(order.id)} pushed to dispatch groups ${groupIds.join(",")} by ${results.map(item => item.account).join(",")}`);
+  scheduleDispatchSearchNotice(order);
   return true;
 }
 
