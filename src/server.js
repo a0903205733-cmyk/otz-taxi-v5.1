@@ -1738,20 +1738,23 @@ async function getLineNickname(event) {
   const userId = event.source?.userId;
   if (!userId) return "";
 
-  try {
-    let profile;
-    if (event.source?.type === "group" && event.source?.groupId) {
-      profile = await line.getGroupMemberProfile(event.source.groupId, userId);
-    } else if (event.source?.type === "room" && event.source?.roomId) {
-      profile = await line.getRoomMemberProfile(event.source.roomId, userId);
-    } else {
-      profile = await line.getProfile(userId);
+  for (const account of getReplyLineAccounts()) {
+    try {
+      let profile;
+      if (event.source?.type === "group" && event.source?.groupId) {
+        profile = await account.client.getGroupMemberProfile(event.source.groupId, userId);
+      } else if (event.source?.type === "room" && event.source?.roomId) {
+        profile = await account.client.getRoomMemberProfile(event.source.roomId, userId);
+      } else {
+        profile = await account.client.getProfile(userId);
+      }
+      if (profile?.displayName) return `${profile.displayName}`;
+    } catch (error) {
+      console.warn(`LINE profile lookup failed by ${account.name}:`, error.message);
     }
-    return profile?.displayName ? `${profile.displayName}` : "";
-  } catch (error) {
-    console.warn("LINE profile lookup failed:", error.message);
-    return "";
   }
+
+  return "";
 }
 
 async function forwardAllowedWindowMessage(event) {
