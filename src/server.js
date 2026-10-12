@@ -366,8 +366,8 @@ async function handleText(event) {
       "偵測到叫車地址：\n" +
         `${formatRideRequestTemplate({ pickup: parsed.pickup, destination: parsed.destination || "尚未提供" })}\n` +
         "是否要叫車？\n" +
-        "請輸入 1：要叫車\n" +
-        "請輸入 2：不叫車"
+        "要叫車請輸入\"1\"\n" +
+        "不要叫車請輸入\"2\""
     );
   }
 
