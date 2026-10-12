@@ -1965,12 +1965,12 @@ async function dispatchTestOrder(event, incomingText = "") {
   ].join("\n"));
 
   try {
-    const results = await pushDispatchLineMessages(getDispatchGroupIds(), text, { accountIndex: 0 });
+    const results = await pushDispatchLineMessages(getDispatchGroupIds(), text);
     console.log(`Test order pushed to ${results.length} groups`);
     return reply(event.replyToken, "測試單已派出");
   } catch (error) {
     logLinePushError("Test order dispatch failed", error);
-    return reply(event.replyToken, "測試單派出失敗，請確認 A1 與派單群組設定");
+    return reply(event.replyToken, "測試單派出失敗，請確認 A1~A4 與派單群組設定");
   }
 }
 
