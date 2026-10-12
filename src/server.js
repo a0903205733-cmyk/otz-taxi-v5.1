@@ -1687,11 +1687,40 @@ async function reply(replyToken, text) {
 
 async function replyMentionUser(replyToken, userId, label, body) {
   const cleanLabel = String(label || "回覆者").replace(/[\r\n]+/gu, " ").trim() || "回覆者";
-  const mentionLabel = `@${cleanLabel}`;
-  const text = normalizeLineText(`${mentionLabel} ${body}`);
-  if (!userId) return reply(replyToken, text);
+  if (!userId) return reply(replyToken, `@${cleanLabel} ${body}`);
 
-  return replyMessages(replyToken, [{
+  try {
+    return await replyMessages(replyToken, [createUserMentionMessage(userId, cleanLabel, body)]);
+  } catch (error) {
+    if (isLineBadRequest(error)) {
+      console.warn("LINE textV2 mention reply failed; falling back to legacy mention.");
+      return replyMessages(replyToken, [createLegacyUserMentionMessage(userId, cleanLabel, body)]);
+    }
+    throw error;
+  }
+}
+
+function createUserMentionMessage(userId, label, body) {
+  return {
+    type: "textV2",
+    text: "{user} " + normalizeLineText(body),
+    substitution: {
+      user: {
+        type: "mention",
+        mentionee: {
+          type: "user",
+          userId
+        },
+        altText: `@${label}`
+      }
+    }
+  };
+}
+
+function createLegacyUserMentionMessage(userId, label, body) {
+  const mentionLabel = `@${label}`;
+  const text = normalizeLineText(`${mentionLabel} ${body}`);
+  return {
     type: "text",
     text,
     mention: {
@@ -1702,7 +1731,7 @@ async function replyMentionUser(replyToken, userId, label, body) {
         userId
       }]
     }
-  }]);
+  };
 }
 
 async function replyMessages(replyToken, messages) {
@@ -1722,6 +1751,11 @@ async function replyMessages(replyToken, messages) {
   const error = new Error("All LINE reply accounts failed");
   error.dispatchErrors = errors;
   throw error;
+}
+
+function isLineBadRequest(error) {
+  if (error?.status === 400 || error?.statusCode === 400) return true;
+  return Boolean(error?.dispatchErrors?.some(item => item.status === 400));
 }
 
 function replyLineSourceId(event) {
