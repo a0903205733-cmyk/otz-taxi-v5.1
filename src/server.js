@@ -305,9 +305,6 @@ async function handleText(event) {
   // Google API 之前就結束，避免誤建訂單與浪費 API 額度。
   const explicitRideIntent = hasRideIntent(incomingText);
   if (!isFareQuoteRequest && incomingText !== "我要叫車" && !isGroupRideRequest(incomingText, parsed)) {
-    if (explicitRideIntent && (isPlaceholderPlace(parsed.pickup) || isPlaceholderPlace(parsed.destination))) {
-      return reply(event.replyToken, "請提供可導航的上車或下車地點；『我家／某某家』需先提供完整地址。");
-    }
     if (explicitRideIntent && containsUnsupportedArea(incomingText)) {
       return reply(event.replyToken, "OTZ 車隊目前只接受台灣本島行程，不接受國外或外島地點。");
     }
