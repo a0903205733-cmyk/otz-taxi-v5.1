@@ -57,7 +57,6 @@ const BOT_RESUME_KEYWORDS = new Set([
   "結束手動聊天", "結束人工聊天", "結束人工介入", "人工結束"
 ]);
 const DEFAULT_LINE_TEST_ALLOWED_NAMES = ["輝”>Σ", "甯", "K", "EP"];
-const AUTO_RIDE_CONFIRMATION_NAMES = new Set(DEFAULT_LINE_TEST_ALLOWED_NAMES);
 const PICKUP_ETA_LIMIT_MINUTES = 20;
 const LOCATION_MAX_AGE_MS = 2 * 60 * 1000;
 const ETA_CACHE_MS = 5 * 60 * 1000;
@@ -357,11 +356,6 @@ async function handleText(event) {
   }
 
   if (!isFareQuoteRequest) {
-    const nickname = autoRideAddress?.nickname || await getLineNickname(event);
-    if (!AUTO_RIDE_CONFIRMATION_NAMES.has(nickname)) {
-      console.log(`Skipped auto ride confirmation for ${nickname || "unknown"}`);
-      return;
-    }
     const recentDispatch = getRecentRideDispatch(event);
     if (recentDispatch) {
       return reply(
@@ -543,11 +537,8 @@ async function getAutoRideAddressCandidate(event, incomingText, parsed, isFareQu
   if (isFareQuoteRequest || !parsed?.pickup) return null;
   if (hasRideIntent(incomingText) || isGroupRideRequest(incomingText, parsed)) return null;
 
-  const nickname = await getLineNickname(event);
-  if (!AUTO_RIDE_CONFIRMATION_NAMES.has(nickname)) return null;
-
   const capturedRoute = await getValidatedCapturedRoute(event, incomingText);
-  if (capturedRoute?.pickup) return { ...capturedRoute, nickname };
+  if (capturedRoute?.pickup) return capturedRoute;
 
   if (!process.env.GOOGLE_MAPS_API_KEY || isPlaceholderPlace(parsed.pickup) || containsUnsupportedArea(parsed.pickup)) {
     return null;
@@ -563,8 +554,7 @@ async function getAutoRideAddressCandidate(event, incomingText, parsed, isFareQu
       destination: cleanCapturedAddress(parsed.destination || ""),
       passengers: parsed.passengers ? `${parsed.passengers}` : "",
       luggage: "",
-      specialNeeds: "",
-      nickname
+      specialNeeds: ""
     };
   } catch (error) {
     console.log(`Skipped auto ride address candidate "${parsed.pickup}": ${error.message}`);
