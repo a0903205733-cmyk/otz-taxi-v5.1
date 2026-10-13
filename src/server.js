@@ -273,7 +273,7 @@ async function handleText(event) {
     rememberFareQuoteIntent(event);
     return reply(event.replyToken, "請問上下車地點");
   }
-  if (incomingText === "我想叫車") {
+  if (incomingText === "我想叫車" || incomingText === "我要叫車") {
     const nickname = await getLineNickname(event);
     return reply(
       event.replyToken,
@@ -283,14 +283,6 @@ async function handleText(event) {
         "🔴➡️ 人數 ：\n" +
         "🔴➡️ 行李 ：\n" +
         "🔴➡️ 特殊需求："
-    );
-  }
-  if (incomingText === "我要叫車") {
-    const settings = await listSettings();
-    return reply(
-      event.replyToken,
-      settings.line_welcome_message ||
-        "請輸入：上車地點到下車地點、時間、人數\n例如：明天早上8點，東港碼頭到左營高鐵，2位"
     );
   }
   const isGroupChat = ["group", "room"].includes(event.source?.type);
