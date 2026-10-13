@@ -299,12 +299,21 @@ async function handleText(event) {
   const rideText = incomingText
     .replace(/^我要叫車[，,、:：\s]*/u, "")
     .replace(/^(?:試算車資|我(?:想|想要|要)試算車資)[，,、:：\s]*/u, "");
-  const parsed = parseRideRequest(rideText);
+  let parsed = parseRideRequest(rideText);
+  const autoRideAddress = await getAutoRideAddressCandidate(event, incomingText, parsed, isFareQuoteRequest);
+  if (autoRideAddress) {
+    parsed = {
+      ...parsed,
+      pickup: autoRideAddress.pickup,
+      destination: autoRideAddress.destination || parsed.destination,
+      passengers: autoRideAddress.passengers || parsed.passengers
+    };
+  }
 
   // 私訊與群組使用相同的介入條件。普通聊天在讀取客戶資料與呼叫
   // Google API 之前就結束，避免誤建訂單與浪費 API 額度。
   const explicitRideIntent = hasRideIntent(incomingText);
-  if (!isFareQuoteRequest && incomingText !== "我要叫車" && !isGroupRideRequest(incomingText, parsed)) {
+  if (!isFareQuoteRequest && incomingText !== "我要叫車" && !isGroupRideRequest(incomingText, parsed) && !autoRideAddress) {
     if (explicitRideIntent && containsUnsupportedArea(incomingText)) {
       return reply(event.replyToken, "OTZ 車隊目前只接受台灣本島行程，不接受國外或外島地點。");
     }
@@ -321,7 +330,7 @@ async function handleText(event) {
           "請輸入：上車地點到下車地點、時間、人數\n例如：明天早上八點，東港到林邊，2位"
       );
     }
-    if (!isFareQuoteRequest && !isGroupRideRequest(incomingText, parsed)) {
+    if (!isFareQuoteRequest && !isGroupRideRequest(incomingText, parsed) && !autoRideAddress) {
       console.log("Ignored non-ride group message");
       return;
     }
@@ -356,7 +365,7 @@ async function handleText(event) {
   }
 
   if (!isFareQuoteRequest) {
-    const nickname = await getLineNickname(event);
+    const nickname = autoRideAddress?.nickname || await getLineNickname(event);
     if (!AUTO_RIDE_CONFIRMATION_NAMES.has(nickname)) {
       console.log(`Skipped auto ride confirmation for ${nickname || "unknown"}`);
       return;
@@ -536,6 +545,39 @@ function clearFareQuoteIntent(event) {
 function hasFareQuoteIntentToday(event) {
   const key = getDailyFareQuoteIntentKey(event);
   return key ? dailyFareQuoteIntents.has(key) : false;
+}
+
+async function getAutoRideAddressCandidate(event, incomingText, parsed, isFareQuoteRequest) {
+  if (isFareQuoteRequest || !parsed?.pickup) return null;
+  if (hasRideIntent(incomingText) || isGroupRideRequest(incomingText, parsed)) return null;
+
+  const nickname = await getLineNickname(event);
+  if (!AUTO_RIDE_CONFIRMATION_NAMES.has(nickname)) return null;
+
+  const capturedRoute = await getValidatedCapturedRoute(event, incomingText);
+  if (capturedRoute?.pickup) return { ...capturedRoute, nickname };
+
+  if (!process.env.GOOGLE_MAPS_API_KEY || isPlaceholderPlace(parsed.pickup) || containsUnsupportedArea(parsed.pickup)) {
+    return null;
+  }
+
+  try {
+    await validatePickupLocation(parsed.pickup, process.env.GOOGLE_MAPS_API_KEY);
+    if (parsed.destination) {
+      await validatePickupLocation(parsed.destination, process.env.GOOGLE_MAPS_API_KEY);
+    }
+    return {
+      pickup: cleanCapturedAddress(parsed.pickup),
+      destination: cleanCapturedAddress(parsed.destination || ""),
+      passengers: parsed.passengers ? `${parsed.passengers}` : "",
+      luggage: "",
+      specialNeeds: "",
+      nickname
+    };
+  } catch (error) {
+    console.log(`Skipped auto ride address candidate "${parsed.pickup}": ${error.message}`);
+    return null;
+  }
 }
 
 function rememberPendingRideConfirmation(event, parsed) {
