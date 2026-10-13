@@ -817,6 +817,10 @@ async function handlePostback(event) {
 }
 
 async function handleDispatchBotTagged(event, incomingText) {
+  if (isOnlyDispatchBotMention(incomingText)) {
+    return reply(event.replyToken, "連同單訊一起標記");
+  }
+
   const completion = parseDispatchCompletionText(incomingText);
   if (!completion.orderId) {
     return reply(event.replyToken, "請在標記訊息中包含訂單編號，例如 OTZ-000123。");
@@ -878,6 +882,13 @@ function isDispatchBotTagged(event, text) {
   const dispatchMentionPattern = /@(?:派單機器人(?:\s*[AＡ]?\s*[1-4])?|OTZ|[AＡ]\s*[1-4])/iu;
   if (mentionees.length && dispatchMentionPattern.test(text)) return true;
   return dispatchMentionPattern.test(text);
+}
+
+function isOnlyDispatchBotMention(text) {
+  const remaining = String(text || "")
+    .replace(/@(?:派單機器人(?:\s*[AＡ]?\s*[1-4])?|OTZ|[AＡ]\s*[1-4])/giu, "")
+    .replace(/[\s　,，、:：;；。.!！?？\-_—~～]+/gu, "");
+  return remaining.length === 0;
 }
 
 function parseDispatchCompletionText(text) {
