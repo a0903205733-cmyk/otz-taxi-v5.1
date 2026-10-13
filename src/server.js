@@ -863,7 +863,7 @@ async function handleDispatchBotTagged(event, incomingText) {
       nickname || "回覆者",
       `"出發"已紀錄完成 ${orderNo(order.id)}\n` +
         `車牌/顏色/抵達時間：${completion.fourDigits}/${completion.color}/${completion.twoDigits}\n` +
-        "加入回金群回報：https://lin.ee/@705bggdh"
+        "加入回金群回報：https://lin.ee/OO0qPnJ"
     );
   } catch (error) {
     console.error("Dispatch bot tag completion failed:", error);
