@@ -818,7 +818,13 @@ async function handlePostback(event) {
 
 async function handleDispatchBotTagged(event, incomingText) {
   if (isOnlyDispatchBotMention(incomingText)) {
-    return reply(event.replyToken, "連同單訊一起標記");
+    const nickname = await getLineNickname(event);
+    return replyMentionUser(
+      event.replyToken,
+      event.source?.userId || "",
+      nickname || "回覆者",
+      "連同單訊一起標記"
+    );
   }
 
   const completion = parseDispatchCompletionText(incomingText);
