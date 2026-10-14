@@ -40,6 +40,7 @@ const pendingRideConfirmations = new Map();
 const pendingDispatchSearchPrompts = new Map();
 const recentRideDispatches = new Map();
 const dispatchSearchTimers = new Map();
+const dispatchBotInfoCache = { key: "", expiresAt: 0, ids: new Set() };
 const recentLineWebhookEvents = [];
 const DEFAULT_ADMIN_TOKEN = "0908160150";
 const LINE_MUTED_SOURCES_SETTING = "muted_line_sources";
@@ -184,27 +185,6 @@ function isValidLineSignature(req) {
 
 async function handleLineEvent(event) {
   const sourceKey = getLineSourceKey(event);
-  await forwardAllowedWindowMessage(event);
-
-  if (isManualChatMessageEvent(event)) {
-    await startHumanHandoff(sourceKey, "manual-chat-message");
-    return;
-  }
-
-  if (event.type === "chatControl") {
-    const mode = String(event.chatControl?.chatMode || event.chatControl?.mode || "").toLowerCase();
-    const isManual = ["active", "manual", "human", "on"].includes(mode);
-    const isBot = ["standby", "bot", "auto", "off"].includes(mode);
-
-    if (isManual) {
-      await startHumanHandoff(sourceKey, `chat-control:${mode}`);
-      console.log(`LINE chat control ${sourceKey}: ${mode}`);
-    } else if (isBot) {
-      await stopHumanHandoff(sourceKey);
-      console.log(`LINE chat control ${sourceKey}: ${mode}`);
-    }
-    return;
-  }
 
   if (event.type === "message" && event.message.type === "text") {
     const incomingText = String(event.message.text || "").trim();
@@ -226,6 +206,33 @@ async function handleLineEvent(event) {
     if (isDispatchBotTagged(event, incomingText)) {
       return handleDispatchBotTagged(event, incomingText);
     }
+
+    if (await isDispatchBotWebhookEvent(event)) {
+      console.log("Dispatch bot webhook skipped normal text handling.");
+      return;
+    }
+  }
+
+  await forwardAllowedWindowMessage(event);
+
+  if (isManualChatMessageEvent(event)) {
+    await startHumanHandoff(sourceKey, "manual-chat-message");
+    return;
+  }
+
+  if (event.type === "chatControl") {
+    const mode = String(event.chatControl?.chatMode || event.chatControl?.mode || "").toLowerCase();
+    const isManual = ["active", "manual", "human", "on"].includes(mode);
+    const isBot = ["standby", "bot", "auto", "off"].includes(mode);
+
+    if (isManual) {
+      await startHumanHandoff(sourceKey, `chat-control:${mode}`);
+      console.log(`LINE chat control ${sourceKey}: ${mode}`);
+    } else if (isBot) {
+      await stopHumanHandoff(sourceKey);
+      console.log(`LINE chat control ${sourceKey}: ${mode}`);
+    }
+    return;
   }
 
   if (await isLineSourceMuted(sourceKey)) {
@@ -2287,10 +2294,7 @@ function createDispatchPlainTextMessage(text) {
 }
 
 function getDispatchLineAccounts() {
-  const tokens = String(process.env.LINE_DISPATCH_TOKENS || "")
-    .split(/[,\n\r]+/u)
-    .map(token => token.trim())
-    .filter(Boolean);
+  const tokens = getConfiguredDispatchTokens();
 
   if (!tokens.length && process.env.LINE_CHANNEL_ACCESS_TOKEN) {
     tokens.push(process.env.LINE_CHANNEL_ACCESS_TOKEN);
@@ -2301,6 +2305,61 @@ function getDispatchLineAccounts() {
     token,
     client: new messagingApi.MessagingApiClient({ channelAccessToken: token })
   }));
+}
+
+function getConfiguredDispatchTokens() {
+  return String(process.env.LINE_DISPATCH_TOKENS || "")
+    .split(/[,\n\r]+/u)
+    .map(token => token.trim())
+    .filter(Boolean);
+}
+
+function getConfiguredDispatchBotIds() {
+  return String(process.env.LINE_DISPATCH_BOT_IDS || "")
+    .split(/[,\n\r]+/u)
+    .map(id => id.trim())
+    .filter(Boolean);
+}
+
+async function isDispatchBotWebhookEvent(event) {
+  const destination = String(event?.destination || "").trim();
+  if (!destination) return false;
+  const ids = await getDispatchBotDestinationIds();
+  return ids.has(destination);
+}
+
+async function getDispatchBotDestinationIds() {
+  const manualIds = getConfiguredDispatchBotIds();
+  const tokens = getConfiguredDispatchTokens();
+  const cacheKey = JSON.stringify({ manualIds, tokens });
+  const now = Date.now();
+
+  if (dispatchBotInfoCache.key === cacheKey && dispatchBotInfoCache.expiresAt > now) {
+    return dispatchBotInfoCache.ids;
+  }
+
+  const ids = new Set(manualIds);
+  await Promise.all(tokens.map(async token => {
+    try {
+      const response = await fetch("https://api.line.me/v2/bot/info", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        console.warn(`LINE dispatch bot info lookup failed: ${response.status}`);
+        return;
+      }
+      const info = await response.json();
+      if (info?.userId) ids.add(String(info.userId));
+      if (info?.basicId) ids.add(String(info.basicId));
+    } catch (error) {
+      console.warn("LINE dispatch bot info lookup failed:", error.message);
+    }
+  }));
+
+  dispatchBotInfoCache.key = cacheKey;
+  dispatchBotInfoCache.expiresAt = now + 60 * 60 * 1000;
+  dispatchBotInfoCache.ids = ids;
+  return ids;
 }
 
 function getReplyLineAccounts() {
