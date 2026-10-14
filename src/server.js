@@ -277,6 +277,11 @@ async function handleText(event) {
     return reply(event.replyToken, "已取消叫車。");
   }
 
+  if (/^[12]$/u.test(incomingText)) {
+    console.log(`Ignored standalone confirmation choice without pending flow: ${incomingText}`);
+    return;
+  }
+
   if (/^測試派單(?:\s|$)/u.test(incomingText)) {
     return dispatchTestOrder(event, incomingText);
   }
