@@ -47,6 +47,7 @@
    - `JWT_SECRET`
    - `ADMIN_TOKEN`
    - `PORT=8080`
+   - 選用：`LINE_NO_RIDE_DETECTION_GROUP_IDS`，指定不偵測地址、不進入叫車流程的 LINE 群組 ID，以逗號或換行分隔；派單群組 `LINE_DISPATCH_GROUP_ID` 會自動套用。
 
 3. 將本專案完整上傳到 GitHub 根目錄，等待 Railway 自動部署。
 

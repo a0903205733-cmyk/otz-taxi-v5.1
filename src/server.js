@@ -211,6 +211,11 @@ async function handleLineEvent(event) {
       console.log("Dispatch bot webhook skipped normal text handling.");
       return;
     }
+
+    if (isRideDetectionDisabledSource(event)) {
+      console.log(`Ride detection disabled for LINE source: ${sourceKey}`);
+      return;
+    }
   }
 
   await forwardAllowedWindowMessage(event);
@@ -2408,6 +2413,22 @@ function getDispatchGroupIds() {
     .split(/[,\n\r]+/u)
     .map(groupId => groupId.trim())
     .filter(Boolean);
+}
+
+function getRideDetectionDisabledSourceIds() {
+  return [
+    ...getDispatchGroupIds(),
+    ...String(process.env.LINE_NO_RIDE_DETECTION_GROUP_IDS || "")
+      .split(/[,\n\r]+/u)
+      .map(sourceId => sourceId.trim())
+      .filter(Boolean)
+  ];
+}
+
+function isRideDetectionDisabledSource(event) {
+  const sourceId = event?.source?.groupId || event?.source?.roomId || "";
+  if (!sourceId) return false;
+  return getRideDetectionDisabledSourceIds().includes(sourceId);
 }
 
 function formatRideRequestTemplate(values) {
