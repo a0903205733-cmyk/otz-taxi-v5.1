@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "test": "node --test test/locations.test.js test/ride-validation.test.js"
   },
   "dependencies": {
     "@line/bot-sdk": "^9.5.0",

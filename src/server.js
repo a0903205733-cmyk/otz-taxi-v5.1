@@ -5,10 +5,10 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { messagingApi } from "@line/bot-sdk";
 import {
-  parseRideRequest, parseRideFormSubmission, classifyRideSchedule, isGroupRideRequest,
-  hasRideIntent, isPlaceholderPlace, containsUnsupportedArea
+  parseRideRequest, parseRideFormSubmission, classifyRideSchedule
 } from "./parser.js";
-import { getRoute, getPickupEtaMinutes, validatePickupLocation } from "./maps.js";
+import { getRoute, getPickupEtaMinutes } from "./maps.js";
+import { validateRideLocations } from "./locations.js";
 import { calculateDonggangTownFare, calculateFare, isDonggangTownTrip } from "./fare.js";
 import { quoteFlex, orderNo } from "./messages.js";
 import {
@@ -304,17 +304,14 @@ async function handleText(event) {
         "🔴➡️ 特殊需求："
     );
   }
-  const isGroupChat = ["group", "room"].includes(event.source?.type);
   const isFareQuoteRequest = isFareQuoteInlineRequest(incomingText) || hasFareQuoteIntentToday(event);
   if (isFareQuoteInlineRequest(incomingText)) rememberFareQuoteIntent(event);
   const pendingRideForm = getPendingRideFormReply(event);
   const formSubmission = pendingRideForm ? parseRideFormSubmission(incomingText) : null;
   const isPendingRideFormReply = Boolean(formSubmission?.pickup || formSubmission?.destination);
   let parsed;
-  let autoRideAddress = null;
 
   if (isPendingRideFormReply) {
-    clearPendingRideFormReply(event);
     // 表單回覆只以地址查詢路線；其餘欄位原文附在叫車單，不另作判讀。
     parsed = {
       pickup: formSubmission.pickup,
@@ -328,43 +325,17 @@ async function handleText(event) {
       .replace(/^我要叫車[，,、:：\s]*/u, "")
       .replace(/^(?:試算車資|我(?:想|想要|要)試算車資)[，,、:：\s]*/u, "");
     parsed = parseRideRequest(rideText);
-    autoRideAddress = await getAutoRideAddressCandidate(event, incomingText, parsed, isFareQuoteRequest);
-    if (autoRideAddress) {
-      parsed = {
-        ...parsed,
-        pickup: autoRideAddress.pickup,
-        destination: autoRideAddress.destination || parsed.destination,
-        // 擷取到的表單原文可能是「一人」，不可覆蓋已解析的整數人數。
-        passengers: parsed.passengers
-      };
-    }
   }
 
-  // 私訊與群組使用相同的介入條件。普通聊天在讀取客戶資料與呼叫
-  // Google API 之前就結束，避免誤建訂單與浪費 API 額度。
-  const explicitRideIntent = hasRideIntent(incomingText);
-  if (!isFareQuoteRequest && incomingText !== "我要叫車" && !isPendingRideFormReply && !isGroupRideRequest(incomingText, parsed) && !autoRideAddress) {
-    if (explicitRideIntent && containsUnsupportedArea(incomingText)) {
-      return reply(event.replyToken, "OTZ 車隊目前只接受台灣本島行程，不接受國外或外島地點。");
-    }
-    console.log("Ignored non-ride message");
+  // All input paths, including active fare/form flows, require verified places.
+  const verified = await getVerifiedRideInput(parsed);
+  if (!verified) {
+    clearPendingRideConfirmation(event);
     return;
   }
-
-  if (isGroupChat) {
-    if (incomingText === "我要叫車") {
-      const groupSettings = await listSettings();
-      return reply(
-        event.replyToken,
-        groupSettings.line_welcome_message ||
-          "請輸入：上車地點到下車地點、時間、人數\n例如：明天早上八點，東港到林邊，2位"
-      );
-    }
-    if (!isFareQuoteRequest && !isPendingRideFormReply && !isGroupRideRequest(incomingText, parsed) && !autoRideAddress) {
-      console.log("Ignored non-ride group message");
-      return;
-    }
-  }
+  parsed = verified;
+  if (isFareQuoteRequest && !parsed.destination) return;
+  if (isPendingRideFormReply) clearPendingRideFormReply(event);
 
   const settings = await listSettings();
 
@@ -418,6 +389,8 @@ async function handleText(event) {
 }
 
 async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings) {
+  parsed = await getVerifiedRideInput(parsed);
+  if (!parsed || (isFareQuoteRequest && !parsed.destination)) return;
   try {
     const schedule = classifyRideSchedule(parsed.rideTime);
     const hasDestination = Boolean(parsed.destination);
@@ -432,7 +405,7 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings) 
       : {
         distanceKm: 0,
         durationMin: 0,
-        originLocation: null,
+        originLocation: parsed.verifiedLocations.pickup.location,
         destinationLocation: null
       };
 
@@ -491,6 +464,7 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings) 
       messages: [quoteFlex(order)]
     });
   } catch (error) {
+    if (error.code === "LOCATION_UNVERIFIED") return;
     console.error("Quote error:", error);
     if (["INVALID_RIDE_TIME", "RIDE_TIME_EXPIRED"].includes(error.code)) {
       return reply(event.replyToken, `⚠️ ${error.message}`);
@@ -573,31 +547,11 @@ function hasFareQuoteIntentToday(event) {
   return key ? dailyFareQuoteIntents.has(key) : false;
 }
 
-async function getAutoRideAddressCandidate(event, incomingText, parsed, isFareQuoteRequest) {
-  if (isFareQuoteRequest || !parsed?.pickup) return null;
-  if (hasRideIntent(incomingText) || isGroupRideRequest(incomingText, parsed)) return null;
-
-  const capturedRoute = await getValidatedCapturedRoute(event, incomingText);
-  if (capturedRoute?.pickup) return capturedRoute;
-
-  if (!process.env.GOOGLE_MAPS_API_KEY || isPlaceholderPlace(parsed.pickup) || containsUnsupportedArea(parsed.pickup)) {
-    return null;
-  }
-
+async function getVerifiedRideInput(parsed) {
   try {
-    await validatePickupLocation(parsed.pickup, process.env.GOOGLE_MAPS_API_KEY);
-    if (parsed.destination) {
-      await validatePickupLocation(parsed.destination, process.env.GOOGLE_MAPS_API_KEY);
-    }
-    return {
-      pickup: cleanCapturedAddress(parsed.pickup),
-      destination: cleanCapturedAddress(parsed.destination || ""),
-      passengers: parsed.passengers ? `${parsed.passengers}` : "",
-      luggage: "",
-      specialNeeds: ""
-    };
+    return await validateRideLocations(parsed, process.env.GOOGLE_MAPS_API_KEY);
   } catch (error) {
-    console.log(`Skipped auto ride address candidate "${parsed.pickup}": ${error.message}`);
+    console.log("Ignored unverified ride locations:", error.code || "VALIDATION_FAILED");
     return null;
   }
 }
@@ -2093,94 +2047,19 @@ function getLineCaptureAllowedNames() {
 
 async function getValidatedCapturedRoute(event, body) {
   const route = extractCapturedRoute(event, body);
-  if (!route.pickup || !process.env.GOOGLE_MAPS_API_KEY) return null;
-
-  try {
-    await validatePickupLocation(route.pickup, process.env.GOOGLE_MAPS_API_KEY);
-    if (route.destination) {
-      await validatePickupLocation(route.destination, process.env.GOOGLE_MAPS_API_KEY);
-    }
-    return route;
-  } catch (error) {
-    console.log(`Skipped LINE capture invalid address "${route.pickup}": ${error.message}`);
-    return null;
-  }
+  return getVerifiedRideInput(route);
 }
 
 function extractCapturedRoute(event, body) {
   const message = event?.message || {};
   if (message.type === "location") {
-    return {
-      pickup: cleanCapturedAddress(message.address || message.title || ""),
-      destination: "",
-      passengers: "",
-      luggage: "",
-      specialNeeds: ""
-    };
+    return { pickup: String(message.address || message.title || "").trim(), destination: "" };
   }
-  if (message.type !== "text") return { pickup: "", destination: "", passengers: "", luggage: "", specialNeeds: "" };
-
-  const text = String(body || "").trim();
-  const lines = text.split(/\r?\n/u);
-  const pickupLine = lines
-    .map(line => line.match(/(?:上車(?:地點|地址)?|地址)(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.+)$/u)?.[1])
-    .find(Boolean);
-  const destinationLine = lines
-    .map(line => line.match(/(?:下車(?:地點|地址)?|目的地)(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.+)$/u)?.[1])
-    .find(Boolean);
-  const passengersLine = extractCapturedFormValue(lines, /人數(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u);
-  const luggageLine = extractCapturedFormValue(lines, /行李(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u);
-  const specialNeedsLine = extractCapturedFormValue(lines, /特殊需求(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u);
-  if (pickupLine || destinationLine) {
-    return {
-      pickup: cleanCapturedAddress(pickupLine || ""),
-      destination: cleanCapturedAddress(destinationLine || ""),
-      passengers: cleanCapturedField(passengersLine),
-      luggage: cleanCapturedField(luggageLine),
-      specialNeeds: cleanCapturedField(specialNeedsLine)
-    };
-  }
-
-  const parsed = parseRideRequest(text);
-  if (isGroupRideRequest(text, parsed)) {
-    return {
-      pickup: cleanCapturedAddress(parsed.pickup),
-      destination: cleanCapturedAddress(parsed.destination),
-      passengers: parsed.passengers ? `${parsed.passengers}` : "",
-      luggage: "",
-      specialNeeds: ""
-    };
-  }
+  if (message.type !== "text") return { pickup: "", destination: "" };
   return {
-    pickup: looksLikeCapturedAddress(parsed.pickup) ? cleanCapturedAddress(parsed.pickup) : "",
-    destination: "",
-    passengers: parsed.passengers ? `${parsed.passengers}` : "",
-    luggage: "",
-    specialNeeds: ""
+    ...parseRideRequest(body),
+    rideDetails: parseRideFormSubmission(body).rideDetails
   };
-}
-
-function extractCapturedFormValue(lines, pattern) {
-  return lines
-    .map(line => line.match(pattern)?.[1])
-    .find(value => value !== undefined);
-}
-
-function cleanCapturedAddress(value) {
-  return String(value || "")
-    .split(/(?:下車(?:地點|地址)?|人數|行李|特殊需求)(?:（[^）]*）|\([^)]*\))?\s*[：:]/u)[0]
-    .replace(/^[\s,，、;；]+|[\s,，、;；]+$/g, "")
-    .trim();
-}
-
-function cleanCapturedField(value) {
-  return String(value || "").replace(/^[\s,，、;；]+|[\s,，、;；]+$/g, "").trim();
-}
-
-function looksLikeCapturedAddress(value) {
-  const text = String(value || "").replace(/\s+/g, "");
-  if (!text || isPlaceholderPlace(text) || containsUnsupportedArea(text)) return false;
-  return /(?:縣|市|區|鄉|鎮|村|里|路|街|大道|巷|弄|號|東港|林邊|潮州|佳冬|枋寮|屏東|高雄|左營|小港|鳳山|高鐵|機場|碼頭|漁港|車站|醫院|診所|學校|大學|宮|廟|市場|夜市|飯店|旅館|民宿|餐廳|超商|便利商店|公園|館|店|中心)/u.test(text);
 }
 
 function formatCapturedLineMessage(values) {
@@ -2212,10 +2091,11 @@ async function dispatchTestOrder(event, incomingText = "") {
   const routeText = String(incomingText || "")
     .replace(/^測試派單[，,、:：\s]*/u, "")
     .trim();
-  const parsed = parseRideRequest(routeText);
+  const parsed = await getVerifiedRideInput(parseRideRequest(routeText));
+  if (!parsed) return;
   const settings = await listSettings();
-  const pickup = parsed.pickup || "上車點";
-  const destination = parsed.destination || "下車點";
+  const pickup = parsed.pickup;
+  const destination = parsed.destination || "尚未提供";
   const fare = calculateFare(0, 0, 0, settings);
   const order = await createOrder({
     customer_line_id: null,
