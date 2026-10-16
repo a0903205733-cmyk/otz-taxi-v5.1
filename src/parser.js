@@ -45,9 +45,12 @@ export function parseRideRequest(text) {
   return { pickup, destination, passengers, rideTime };
 }
 
-// 表單回覆只取地址欄位，避免人數、行李或特殊需求混入訂單解析。
-export function parseRideFormAddresses(text) {
-  return extractLabeledRideForm(text);
+// 表單回覆只解析上下車地址；其餘指定欄位以原文附在叫車單，不另作判讀。
+export function parseRideFormSubmission(text) {
+  return {
+    ...extractLabeledRideForm(text),
+    rideDetails: extractRideFormDetails(text)
+  };
 }
 
 export function parseScheduledAt(rideTime, now = new Date()) {
@@ -202,6 +205,14 @@ function extractLabeledRideForm(value) {
     pickup: cleanFormPlace(pickup, /(?:下車(?:地點|地址)?|目的地|人數|行李|特殊需求)(?:（[^）]*）|\([^)]*\))?\s*[：:]/u),
     destination: cleanFormPlace(destination, /(?:人數|行李|特殊需求)(?:（[^）]*）|\([^)]*\))?\s*[：:]/u)
   };
+}
+
+function extractRideFormDetails(value) {
+  return String(value || "")
+    .split(/\r?\n/u)
+    .map(line => line.trim())
+    .filter(line => /^(?:🔴\s*➡️\s*)?(?:人數|行李|特殊需求)(?:（[^）]*）|\([^)]*\))?\s*[：:]/u.test(line))
+    .join("\n");
 }
 
 function cleanFormPlace(value, stopPattern) {

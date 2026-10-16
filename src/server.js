@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { messagingApi } from "@line/bot-sdk";
 import {
-  parseRideRequest, parseRideFormAddresses, classifyRideSchedule, isGroupRideRequest,
+  parseRideRequest, parseRideFormSubmission, classifyRideSchedule, isGroupRideRequest,
   hasRideIntent, isPlaceholderPlace, containsUnsupportedArea
 } from "./parser.js";
 import { getRoute, getPickupEtaMinutes, validatePickupLocation } from "./maps.js";
@@ -308,19 +308,20 @@ async function handleText(event) {
   const isFareQuoteRequest = isFareQuoteInlineRequest(incomingText) || hasFareQuoteIntentToday(event);
   if (isFareQuoteInlineRequest(incomingText)) rememberFareQuoteIntent(event);
   const pendingRideForm = getPendingRideFormReply(event);
-  const formAddresses = pendingRideForm ? parseRideFormAddresses(incomingText) : null;
-  const isPendingRideFormReply = Boolean(formAddresses?.pickup || formAddresses?.destination);
+  const formSubmission = pendingRideForm ? parseRideFormSubmission(incomingText) : null;
+  const isPendingRideFormReply = Boolean(formSubmission?.pickup || formSubmission?.destination);
   let parsed;
   let autoRideAddress = null;
 
   if (isPendingRideFormReply) {
     clearPendingRideFormReply(event);
-    // 表單回覆只用上下車地址建單；人數、行李與特殊需求不進入訂單資料。
+    // 表單回覆只以地址查詢路線；其餘欄位原文附在叫車單，不另作判讀。
     parsed = {
-      pickup: formAddresses.pickup,
-      destination: formAddresses.destination,
+      pickup: formSubmission.pickup,
+      destination: formSubmission.destination,
       passengers: null,
-      rideTime: ""
+      rideTime: "",
+      rideDetails: formSubmission.rideDetails
     };
   } else {
     const rideText = incomingText
@@ -454,6 +455,7 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings) 
       is_reservation: schedule.isReservation,
       scheduled_at: schedule.scheduledAt,
       passengers: parsed.passengers,
+      ride_details: parsed.rideDetails || null,
       pickup_latitude: route.originLocation?.latitude ?? null,
       pickup_longitude: route.originLocation?.longitude ?? null,
       distance_km: Number(route.distanceKm.toFixed(2)),
@@ -479,7 +481,7 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings) 
       return reply(
         event.replyToken,
         `✅ 已建立叫車單\n訂單：${orderNo(order.id)}\n` +
-          `${formatRideRequestTemplate({ pickup: parsed.pickup, destination })}\n` +
+          `${formatRideRequestTemplate({ pickup: parsed.pickup, destination, rideDetails: parsed.rideDetails })}\n` +
           getRideSearchNotice()
       );
     }
@@ -2196,7 +2198,8 @@ async function pushOrderToDispatchGroup(order) {
       destination: order.destination,
       passengers: order.passengers ? `${order.passengers}` : "",
       luggage: "",
-      specialNeeds: ""
+      specialNeeds: "",
+      rideDetails: order.ride_details
     })
   ].join("\n"));
   const results = await pushDispatchLineMessages(groupIds, text);
@@ -2495,8 +2498,9 @@ function formatRideRequestTemplate(values) {
   return [
     "60/20/2",
     `上車地點:${values.pickup || ""}`,
-    `下車地點:${values.destination || ""}`
-  ].join("\n");
+    `下車地點:${values.destination || ""}`,
+    values.rideDetails || ""
+  ].filter(Boolean).join("\n");
 }
 
 function getLineSourceKey(event) {

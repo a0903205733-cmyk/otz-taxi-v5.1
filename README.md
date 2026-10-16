@@ -35,8 +35,9 @@
    - `database/upgrade_v4_2.sql`
    - `database/upgrade_v5_0.sql`
    - `database/upgrade_v5_2.sql`
+   - `database/upgrade_v5_3.sql`
 
-   已執行過前兩支時，只需重新執行最新版 `upgrade_v5_2.sql`。Migration 可重複執行。
+   已執行過前幾支時，只需執行最新版 `upgrade_v5_3.sql`。Migration 可重複執行。
 
 2. Railway 必要環境變數：
    - `LINE_CHANNEL_SECRET`
