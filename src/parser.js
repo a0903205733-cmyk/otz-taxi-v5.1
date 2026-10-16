@@ -45,6 +45,11 @@ export function parseRideRequest(text) {
   return { pickup, destination, passengers, rideTime };
 }
 
+// 表單回覆只取地址欄位，避免人數、行李或特殊需求混入訂單解析。
+export function parseRideFormAddresses(text) {
+  return extractLabeledRideForm(text);
+}
+
 export function parseScheduledAt(rideTime, now = new Date()) {
   const text = String(rideTime || "").trim();
   if (!text) return null;

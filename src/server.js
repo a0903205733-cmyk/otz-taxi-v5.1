@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { messagingApi } from "@line/bot-sdk";
 import {
-  parseRideRequest, classifyRideSchedule, isGroupRideRequest,
+  parseRideRequest, parseRideFormAddresses, classifyRideSchedule, isGroupRideRequest,
   hasRideIntent, isPlaceholderPlace, containsUnsupportedArea
 } from "./parser.js";
 import { getRoute, getPickupEtaMinutes, validatePickupLocation } from "./maps.js";
@@ -37,6 +37,7 @@ const pickupEtaCache = new Map();
 const humanHandoffTimers = new Map();
 const dailyFareQuoteIntents = new Map();
 const pendingRideConfirmations = new Map();
+const pendingRideFormReplies = new Map();
 const pendingDispatchSearchPrompts = new Map();
 const recentRideDispatches = new Map();
 const dispatchSearchTimers = new Map();
@@ -290,6 +291,8 @@ async function handleText(event) {
     return reply(event.replyToken, "請問上下車地點");
   }
   if (incomingText === "我想叫車" || incomingText === "我要叫車") {
+    clearPendingRideConfirmation(event);
+    rememberPendingRideFormReply(event);
     const nickname = await getLineNickname(event);
     return reply(
       event.replyToken,
@@ -304,24 +307,42 @@ async function handleText(event) {
   const isGroupChat = ["group", "room"].includes(event.source?.type);
   const isFareQuoteRequest = isFareQuoteInlineRequest(incomingText) || hasFareQuoteIntentToday(event);
   if (isFareQuoteInlineRequest(incomingText)) rememberFareQuoteIntent(event);
-  const rideText = incomingText
-    .replace(/^我要叫車[，,、:：\s]*/u, "")
-    .replace(/^(?:試算車資|我(?:想|想要|要)試算車資)[，,、:：\s]*/u, "");
-  let parsed = parseRideRequest(rideText);
-  const autoRideAddress = await getAutoRideAddressCandidate(event, incomingText, parsed, isFareQuoteRequest);
-  if (autoRideAddress) {
+  const pendingRideForm = getPendingRideFormReply(event);
+  const formAddresses = pendingRideForm ? parseRideFormAddresses(incomingText) : null;
+  const isPendingRideFormReply = Boolean(formAddresses?.pickup || formAddresses?.destination);
+  let parsed;
+  let autoRideAddress = null;
+
+  if (isPendingRideFormReply) {
+    clearPendingRideFormReply(event);
+    // 表單回覆只用上下車地址建單；人數、行李與特殊需求不進入訂單資料。
     parsed = {
-      ...parsed,
-      pickup: autoRideAddress.pickup,
-      destination: autoRideAddress.destination || parsed.destination,
-      passengers: autoRideAddress.passengers || parsed.passengers
+      pickup: formAddresses.pickup,
+      destination: formAddresses.destination,
+      passengers: null,
+      rideTime: ""
     };
+  } else {
+    const rideText = incomingText
+      .replace(/^我要叫車[，,、:：\s]*/u, "")
+      .replace(/^(?:試算車資|我(?:想|想要|要)試算車資)[，,、:：\s]*/u, "");
+    parsed = parseRideRequest(rideText);
+    autoRideAddress = await getAutoRideAddressCandidate(event, incomingText, parsed, isFareQuoteRequest);
+    if (autoRideAddress) {
+      parsed = {
+        ...parsed,
+        pickup: autoRideAddress.pickup,
+        destination: autoRideAddress.destination || parsed.destination,
+        // 擷取到的表單原文可能是「一人」，不可覆蓋已解析的整數人數。
+        passengers: parsed.passengers
+      };
+    }
   }
 
   // 私訊與群組使用相同的介入條件。普通聊天在讀取客戶資料與呼叫
   // Google API 之前就結束，避免誤建訂單與浪費 API 額度。
   const explicitRideIntent = hasRideIntent(incomingText);
-  if (!isFareQuoteRequest && incomingText !== "我要叫車" && !isGroupRideRequest(incomingText, parsed) && !autoRideAddress) {
+  if (!isFareQuoteRequest && incomingText !== "我要叫車" && !isPendingRideFormReply && !isGroupRideRequest(incomingText, parsed) && !autoRideAddress) {
     if (explicitRideIntent && containsUnsupportedArea(incomingText)) {
       return reply(event.replyToken, "OTZ 車隊目前只接受台灣本島行程，不接受國外或外島地點。");
     }
@@ -338,7 +359,7 @@ async function handleText(event) {
           "請輸入：上車地點到下車地點、時間、人數\n例如：明天早上八點，東港到林邊，2位"
       );
     }
-    if (!isFareQuoteRequest && !isGroupRideRequest(incomingText, parsed) && !autoRideAddress) {
+    if (!isFareQuoteRequest && !isPendingRideFormReply && !isGroupRideRequest(incomingText, parsed) && !autoRideAddress) {
       console.log("Ignored non-ride group message");
       return;
     }
@@ -589,6 +610,31 @@ function rememberPendingRideConfirmation(event, parsed) {
   });
 }
 
+function rememberPendingRideFormReply(event) {
+  const key = getRideConfirmationKey(event);
+  if (!key) return;
+  cleanupPendingRideFormReplies();
+  pendingRideFormReplies.set(key, { createdAt: Date.now() });
+}
+
+function getPendingRideFormReply(event) {
+  const key = getRideConfirmationKey(event);
+  if (!key) return null;
+  cleanupPendingRideFormReplies();
+  const pending = pendingRideFormReplies.get(key);
+  if (!pending) return null;
+  if (Date.now() - pending.createdAt > RIDE_CONFIRMATION_TTL_MS) {
+    pendingRideFormReplies.delete(key);
+    return null;
+  }
+  return pending;
+}
+
+function clearPendingRideFormReply(event) {
+  const key = getRideConfirmationKey(event);
+  if (key) pendingRideFormReplies.delete(key);
+}
+
 function getPendingRideConfirmation(event) {
   const key = getRideConfirmationKey(event);
   if (!key) return null;
@@ -644,6 +690,15 @@ function cleanupPendingRideConfirmations() {
   for (const [key, pending] of pendingRideConfirmations.entries()) {
     if (now - pending.createdAt > RIDE_CONFIRMATION_TTL_MS) {
       pendingRideConfirmations.delete(key);
+    }
+  }
+}
+
+function cleanupPendingRideFormReplies() {
+  const now = Date.now();
+  for (const [key, pending] of pendingRideFormReplies.entries()) {
+    if (now - pending.createdAt > RIDE_CONFIRMATION_TTL_MS) {
+      pendingRideFormReplies.delete(key);
     }
   }
 }
