@@ -170,6 +170,23 @@ for (const form of [false, true]) {
   });
 }
 
+for (const form of [false, true]) {
+  test(`postal suffix repair accepts the customer form (pending ${form})`, async t => {
+    const pickup = "屏東縣崁頂鄉園寮村南州路1-2號";
+    const destination = "屏東縣屏東市建民路104-3號";
+    const target = geocodeResult({ place_id: "target", formatted_address: `900台灣${destination}` });
+    target.address_components[2].long_name = "屏東市";
+    target.address_components[3].long_name = "建民路";
+    target.address_components[4].long_name = "104-3號";
+    const { context, calls, event } = harness(t, { form, geocode: [postalSuffixResult(), target] });
+    await context.handleText(event(`上車地點：${pickup}\n下車地點：${destination}`));
+    assert.equal(calls.confirmations.length, 1);
+    assert.equal(calls.confirmations[0].pickup, pickup);
+    assert.equal(calls.confirmations[0].destination, destination);
+    assert.equal(calls.orders.length, 0);
+  });
+}
+
 test("two unlabeled address lines are verified before fare calculation", async t => {
   const pickup = "屏東縣竹田鄉大湖村大平路62-1號";
   const destination = "屏東縣新園鄉聖心路106巷2號";
@@ -259,3 +276,4 @@ test("test orders and capture forwarding cannot write unverified locations", asy
   const destinationOnly = `下車地址：${TEMPLE}`;
   assert.equal(await context.getValidatedCapturedRoute(event(destinationOnly), destinationOnly), null);
 });
+import { postalSuffixResult } from "./fixtures/locations.js";

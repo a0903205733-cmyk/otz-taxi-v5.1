@@ -1,6 +1,21 @@
 export const ADDRESS = "屏東縣東港鎮中山路12號";
 export const TEMPLE = "東港鎮海宮";
 
+export function postalSuffixResult() {
+  return geocodeResult({
+    formatted_address: "924台灣屏東縣崁頂鄉園寮村南州路1-2號924號",
+    address_components: [
+      { long_name: "1-2號924", short_name: "1-2號924", types: ["street_number"] },
+      { long_name: "南州路", types: ["route"] },
+      { long_name: "園寮村", types: ["administrative_area_level_3"] },
+      { long_name: "崁頂鄉", types: ["administrative_area_level_2"] },
+      { long_name: "屏東縣", types: ["administrative_area_level_1"] },
+      { long_name: "台灣", short_name: "TW", types: ["country"] },
+      { long_name: "924", types: ["postal_code"] }
+    ]
+  });
+}
+
 export function geocodeResult(overrides = {}) {
   return {
     place_id: "address-12", formatted_address: `928台灣${ADDRESS}`,

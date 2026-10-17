@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { extractLocationCandidate, validateLocation, validateRideLocations } from "../src/locations.js";
 import { getRoute } from "../src/maps.js";
+import { postalSuffixResult } from "./fixtures/locations.js";
 import { ADDRESS, TEMPLE, geocodeResult, placeResult, mapsFetch, transportPlaces } from "./fixtures/locations.js";
 
 function stub(t, options) {
@@ -9,6 +10,28 @@ function stub(t, options) {
   t.mock.method(globalThis, "fetch", mapsFetch(calls, options));
   return calls;
 }
+
+test("repairs only corroborated postal suffixes without bypassing address validation", async t => {
+  const query = "屏東縣崁頂鄉園寮村南州路1-2號";
+  let result = postalSuffixResult();
+  t.mock.method(globalThis, "fetch", async () => Response.json({ status: "OK", results: [result] }));
+  const valid = await validateLocation(query, "test-key");
+  assert.equal(valid.formattedAddress, `924台灣${query}`);
+  assert.equal(valid.query, query);
+  for (const mutate of [
+    r => { r.partial_match = true; },
+    r => { r.address_components[6].long_name = "900"; },
+    r => { r.address_components.pop(); },
+    r => { r.address_components[0].long_name = "1-3號924"; },
+    r => { r.formatted_address = r.formatted_address.replace("1-2", "1-3"); },
+    r => { r.geometry.location_type = "RANGE_INTERPOLATED"; },
+    r => { r.address_components[0].inferred = true; }
+  ]) {
+    result = postalSuffixResult();
+    mutate(result);
+    await assert.rejects(validateLocation(query, "test-key"), { code: "LOCATION_UNVERIFIED" });
+  }
+});
 
 for (const type of ["tourist_attraction", "beach", "scenic_spot", "observation_deck", "nature_preserve", "historical_place", "tourist_information_center", "campground"]) {
   test(`scenic places accept verified ${type} without a street number`, async t => {
@@ -142,6 +165,26 @@ test("landmark uses Places Text Search with complete field mask", async t => {
   for (const field of ["places.id", "places.formattedAddress", "places.location", "places.displayName", "places.types", "nextPageToken"]) {
     assert.ok(calls[0].headers["X-Goog-FieldMask"].includes(field));
   }
+});
+
+test("Donggang township Zhenhai temple alias verifies names and district", async t => {
+  let places = [placeResult()];
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    calls.push(JSON.parse(init.body));
+    return Response.json({ places });
+  });
+  for (const name of ["鎮海宮", "東港鎮海宮", "東港鎮鎮海宮"]) {
+    places = [placeResult({ displayName: { text: name } })];
+    const result = await validateLocation("東港鎮鎮海宮", "test-key");
+    assert.equal(result.placeId, "temple");
+    assert.equal(result.query, "東港鎮鎮海宮");
+  }
+  assert.equal(calls[0].textQuery, "屏東縣東港鎮鎮海宮");
+  places = [placeResult({ formattedAddress: "高雄市旗津區鎮海路1號" })];
+  await assert.rejects(validateLocation("東港鎮鎮海宮", "test-key"), { code: "LOCATION_UNVERIFIED" });
+  places = [placeResult(), placeResult({ id: "second-temple" })];
+  await assert.rejects(validateLocation("東港鎮鎮海宮", "test-key"), { code: "LOCATION_UNVERIFIED" });
 });
 
 for (const [name, patch] of [

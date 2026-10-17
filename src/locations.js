@@ -26,6 +26,10 @@ const DISTRICT_TYPES = new Set([
 ]);
 const LANDMARK_ALIASES = [
   {
+    name: "鎮海宮", city: "屏東縣", district: "東港鎮", types: ["buddhist_temple", "hindu_temple"],
+    names: ["東港鎮鎮海宮"], resultNames: ["鎮海宮", "東港鎮海宮"]
+  },
+  {
     name: "慈惠醫護管理專科學校", city: "屏東縣", district: "南州鄉", types: ["university", "school", "educational_institution"],
     streetAddress: "三民路367號",
     names: ["慈惠", "慈惠醫專", "慈惠醫護管理專科學校"]
@@ -207,6 +211,27 @@ function matchesAddress(query, result) {
   return true;
 }
 
+function repairPostalNumberSuffix(query, result) {
+  const source = normalize(query);
+  const number = source.match(/(\d+(?:-\d+)?)號$/u)?.[1];
+  if (!number || (source.match(/號/gu) || []).length !== 1) return result;
+  const components = result.address_components || [];
+  const postal = components.find(component => component.types?.includes("postal_code"));
+  const code = postal && componentNames(postal).find(value => /^\d{3,6}$/u.test(value));
+  const street = components.find(component => component.types?.includes("street_number"));
+  if (!code || !street) return result;
+  const malformed = `${number}號${code}`;
+  if (!componentNames(street).every(value => value === malformed || value === `${malformed}號`)) return result;
+  const address = normalize(result.formatted_address);
+  if (!address.endsWith(`${malformed}號`)) return result;
+  // Only remove a duplicated postal-code suffix corroborated by both Google fields.
+  return { ...result,
+    formatted_address: address.slice(0, -`${malformed}號`.length) + `${number}號`,
+    address_components: components.map(component => component === street ?
+      { ...component, long_name: number, short_name: number } : component)
+  };
+}
+
 async function geocodeAddress(candidate, apiKey) {
   const params = new URLSearchParams({
     address: candidate.query, components: "country:TW", language: "zh-TW", key: apiKey
@@ -217,7 +242,8 @@ async function geocodeAddress(candidate, apiKey) {
   if (!response.ok) throw unverified(`geocoding HTTP ${response.status}`);
   const payload = await response.json();
   if (payload.status !== "OK" || !Array.isArray(payload.results)) throw unverified("geocoding rejected", payload.status === "ZERO_RESULTS");
-  const candidates = payload.results.filter(result => matchesAddress(candidate.query, result)).map(result => ({
+  const candidates = payload.results.map(result => repairPostalNumberSuffix(candidate.query, result))
+    .filter(result => matchesAddress(candidate.query, result)).map(result => ({
     query: candidate.query, kind: "address", placeId: result.place_id,
     formattedAddress: result.formatted_address,
     location: { latitude: result.geometry?.location?.lat, longitude: result.geometry?.location?.lng },
