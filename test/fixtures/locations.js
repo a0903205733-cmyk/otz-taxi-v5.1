@@ -49,8 +49,13 @@ export const transportPlaces = [
   ["林邊火車站", "林邊車站", "屏東縣林邊鄉", "train_station"],
   ["屏東火車站", "屏東車站", "屏東縣屏東市", "train_station"],
   ["潮州火車站", "潮州車站", "屏東縣潮州鎮", "train_station"],
-  ["東港碼頭", "東琉線船運服務中心", "屏東縣東港鎮", "ferry_terminal"]
+  ["東港碼頭", "東琉線船運服務中心", "屏東縣東港鎮", "ferry_terminal"],
+  ["新左營火車站", "新左營車站", "高雄市左營區", "transportation_service"],
+  ["東港海事", "國立東港高級海事水產職業學校", "屏東縣東港鎮", "secondary_school"],
+  ["慈惠", "慈惠醫護管理專科學校", "屏東縣南州鄉", "university"]
 ].map(([query, name, area, type]) => ({ query, place: placeResult({
-  id: `transport-${query}`, displayName: { text: name }, formattedAddress: `${area}${query === "左營高鐵" ? "高鐵路105號" : "測試路1號"}`,
+  id: `transport-${query}`, displayName: { text: name }, formattedAddress: `${area}${{
+    "左營高鐵": "高鐵路105號", "新左營火車站": "站前北路1號", "東港海事": "豐漁街66號", "慈惠": "三民路367號"
+  }[query] || "測試路1號"}`,
   primaryType: type, types: [type], addressComponents: [{ longText: "台灣", shortText: "TW", types: ["country"] }]
 }) }));

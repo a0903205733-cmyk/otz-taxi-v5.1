@@ -139,7 +139,7 @@ export function containsUnsupportedArea(value) {
 function isLikelyLocation(value) {
   const text = String(value || "").replace(/\s+/g, "");
   if (!text || isPlaceholderPlace(text)) return false;
-  const known = /東港|林邊|潮州|佳冬|枋寮|屏東|高雄|左營|三民|小港|鳳山|苓雅|前鎮|楠梓|鼓山|鹽埕|旗津|岡山|高醫|長庚|榮總|夢時代|東山|星光|大東港/u;
+  const known = /東港|林邊|潮州|佳冬|枋寮|屏東|高雄|左營|三民|小港|鳳山|苓雅|前鎮|楠梓|鼓山|鹽埕|旗津|岡山|高醫|長庚|榮總|夢時代|東山|星光|大東港|慈惠/u;
   const address = /(?:縣|市|區|鄉|鎮|村|里|路|街|大道|巷|弄|號)/u;
   const poi = /(?:醫院|診所|車站|高鐵|機場|碼頭|漁港|港口|KTV|ktv|釣蝦場|學校|大學|宮|廟|市場|夜市|飯店|旅館|民宿|餐廳|超商|便利商店|銀行|郵局|分局|分駐所|派出所|公園|館|店|中心)/u;
   return known.test(text) || address.test(text) || poi.test(text);
@@ -193,13 +193,20 @@ function cleanPlace(value) {
 }
 
 function extractLabeledRideForm(value) {
-  const lines = String(value || "").split(/\r?\n/u);
+  const lines = String(value || "").split(/\r?\n/u).map(line => line.replace(/\\\s*$/u, "").trim());
   const pickup = lines
-    .map(line => line.match(/上車(?:地點|地址)?(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u)?.[1])
+    .map(line => line.match(/上車(?:地點|地址)?(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u)?.[1] ??
+      line.match(/^上(?:\s*[：:]\s*|\s+)(.+)$/u)?.[1])
     .find(text => String(text || "").trim());
   const destination = lines
-    .map(line => line.match(/(?:下車(?:地點|地址)?|目的地)(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u)?.[1])
+    .map(line => line.match(/(?:下車(?:地點|地址)?|目的地)(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u)?.[1] ??
+      line.match(/^下(?:\s*[：:]\s*|\s+)(.+)$/u)?.[1])
     .find(text => String(text || "").trim());
+
+  const nonEmptyLines = lines.filter(Boolean);
+  if (!pickup && !destination && nonEmptyLines.length === 2 && nonEmptyLines.every(isLikelyLocation)) {
+    return { pickup: cleanPlace(nonEmptyLines[0]), destination: cleanPlace(nonEmptyLines[1]) };
+  }
 
   return {
     pickup: cleanFormPlace(pickup, /(?:下車(?:地點|地址)?|目的地|人數|行李|特殊需求)(?:（[^）]*）|\([^)]*\))?\s*[：:]/u),

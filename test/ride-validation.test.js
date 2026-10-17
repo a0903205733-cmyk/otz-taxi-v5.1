@@ -10,6 +10,32 @@ import { ADDRESS, TEMPLE, geocodeResult, placeResult, mapsFetch, transportPlaces
 
 const source = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 
+test("short pickup/dropoff labels preserve the two locations", () => {
+  const pickup = "高雄市左營區尾西里實踐路18號";
+  for (const separator of [" ", "：", ": "]) {
+    const text = `上${separator}${pickup}\n下${separator}新左營火車站`;
+    for (const parsed of [parseRideRequest(text), parseRideFormSubmission(text)]) {
+      assert.equal(parsed.pickup, pickup);
+      assert.equal(parsed.destination, "新左營火車站");
+    }
+  }
+  assert.equal(parseRideRequest("下厝街91號").pickup, "下厝街91號");
+  assert.equal(parseRideRequest("上班\n下班").destination, "");
+});
+
+test("exactly two unlabeled location lines mean pickup then destination", () => {
+  const pickup = "屏東縣竹田鄉大湖村大平路62-1號";
+  const destination = "屏東縣新園鄉聖心路106巷2號";
+  for (const text of [`${pickup}\n${destination}`, `${pickup}\\\r\n${destination}`, `\n${pickup}\n\n${destination}\n`]) {
+    for (const parsed of [parseRideRequest(text), parseRideFormSubmission(text)]) {
+      assert.equal(parsed.pickup, pickup);
+      assert.equal(parsed.destination, destination);
+    }
+  }
+  assert.equal(parseRideRequest(`${pickup}\n2人`).destination, "");
+  assert.equal(parseRideRequest(`${pickup}\n${destination}\n${TEMPLE}`).destination, "");
+});
+
 // Run the actual handlers with isolated LINE/DB dependencies, without starting
 // Express, loading production secrets, or sending customer messages.
 function harness(t, options = {}) {
@@ -112,6 +138,41 @@ test("common transport names work for both ride confirmation and fare quotes", a
   assert.equal(calls.orders.length, 1);
   assert.equal(calls.orders[0].pickup, "左營高鐵");
   assert.equal(calls.orders[0].destination, "小港機場");
+});
+
+for (const form of [false, true]) {
+  test(`short labels work through the actual handler (pending form ${form})`, async t => {
+    const pickup = "高雄市左營區尾西里實踐路18號";
+    const result = geocodeResult({ formatted_address: `台灣${pickup}` });
+    result.address_components[1].long_name = "高雄市";
+    result.address_components[2].long_name = "左營區";
+    result.address_components[3].long_name = "實踐路";
+    result.address_components[4].long_name = "18";
+    const { context, calls, event } = harness(t, { form, geocode: [result], places: transportPlaces.map(item => item.place) });
+    await context.handleText(event(`上 ${pickup}\n下 新左營火車站`));
+    assert.equal(calls.confirmations.length, 1);
+    assert.equal(calls.confirmations[0].pickup, pickup);
+    assert.equal(calls.confirmations[0].destination, "新左營火車站");
+    assert.equal(calls.orders.length, 0);
+  });
+}
+
+test("two unlabeled address lines are verified before fare calculation", async t => {
+  const pickup = "屏東縣竹田鄉大湖村大平路62-1號";
+  const destination = "屏東縣新園鄉聖心路106巷2號";
+  const origin = geocodeResult({ formatted_address: `台灣${pickup}` });
+  origin.address_components[2].long_name = "竹田鄉";
+  origin.address_components[3].long_name = "大平路";
+  origin.address_components[4].long_name = "62-1";
+  const target = geocodeResult({ place_id: "destination", formatted_address: `台灣${destination}` });
+  target.address_components[2].long_name = "新園鄉";
+  target.address_components[3].long_name = "聖心路106巷";
+  target.address_components[4].long_name = "2";
+  const { context, calls, event } = harness(t, { geocode: [origin, target] });
+  await context.handleText(event(`試算車資\n${pickup}\n${destination}`));
+  assert.equal(calls.orders.length, 1);
+  assert.equal(calls.orders[0].pickup, pickup);
+  assert.equal(calls.orders[0].destination, destination);
 });
 
 test("village-form address works for both ride confirmation and fare calculation", async t => {

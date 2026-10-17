@@ -204,6 +204,24 @@ test("Donggang pier and ferry boarding alias use the terminal, not a ticket offi
   }
 });
 
+test("TRA Xin Zuoying and Donggang school aliases do not select the HSR or nearby businesses", async t => {
+  const railway = transportPlaces.find(item => item.query === "新左營火車站").place;
+  const school = transportPlaces.find(item => item.query === "東港海事").place;
+  stub(t, { places: [railway, school, transportPlaces[0].place] });
+  assert.equal((await validateLocation("新左營火車站", "test-key")).placeId, railway.id);
+  assert.equal((await validateLocation("國立東港海事水產職業學校", "test-key")).placeId, school.id);
+  t.mock.method(globalThis, "fetch", mapsFetch([], { places: [{ ...school, primaryType: "bus_stop" }] }));
+  await assert.rejects(validateLocation("東港海事", "test-key"), { code: "LOCATION_UNVERIFIED" });
+});
+
+test("Tzu Hui shorthand resolves only to the Nanzhou school", async t => {
+  const school = structuredClone(transportPlaces.find(item => item.query === "慈惠").place);
+  stub(t, { places: [school] });
+  assert.equal((await validateLocation("慈惠醫專", "test-key")).placeId, school.id);
+  school.formattedAddress = "高雄市三民區三民路367號";
+  await assert.rejects(validateLocation("慈惠", "test-key"), { code: "LOCATION_UNVERIFIED" });
+});
+
 test("unresolved township street address retries once with Pingtung County", async t => {
   const calls = [];
   t.mock.method(globalThis, "fetch", async url => {

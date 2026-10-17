@@ -24,6 +24,21 @@ const DISTRICT_TYPES = new Set([
 ]);
 const LANDMARK_ALIASES = [
   {
+    name: "慈惠醫護管理專科學校", city: "屏東縣", district: "南州鄉", types: ["university", "school", "educational_institution"],
+    streetAddress: "三民路367號",
+    names: ["慈惠", "慈惠醫專", "慈惠醫護管理專科學校"]
+  },
+  {
+    name: "新左營車站", city: "高雄市", district: "左營區", types: ["train_station", "transportation_service"],
+    streetAddress: "站前北路1號", resultNames: ["新左營"],
+    names: ["新左營火車站", "新左營車站", "新左營站", "台鐵新左營站", "台鐵新左營車站"]
+  },
+  {
+    name: "國立東港高級海事水產職業學校", city: "屏東縣", district: "東港鎮", types: ["secondary_school", "school", "educational_institution"],
+    streetAddress: "豐漁街66號",
+    names: ["東港海事", "東港海事水產", "國立東港海事水產職業學校", "國立東港高級海事水產職業學校"]
+  },
+  {
     name: "高鐵左營站", city: "高雄市", district: "左營區", types: ["train_station", "transit_station"],
     resultNames: ["左營"], streetAddress: "高鐵路105號",
     names: ["左營高鐵", "左營高鐵站", "高鐵左營", "高鐵左營站", "台灣高鐵左營站", "台灣高鐵左營車站"]
