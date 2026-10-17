@@ -92,6 +92,43 @@ function isDistrict(component) {
     /[區鄉鎮市]$/u.test(component.long_name ?? component.longText ?? "");
 }
 
+function stripAddressArea(value, components) {
+  let text = normalize(value);
+  const prefixes = components.filter(component => isDistrict(component) ||
+    component.types?.some(type => ["country", "postal_code", "administrative_area_level_1"].includes(type)))
+    .flatMap(componentNames).sort((a, b) => b.length - a.length);
+  for (let i = 0; i < prefixes.length; i += 1) {
+    const prefix = prefixes.find(name => text.startsWith(name));
+    if (!prefix) break;
+    text = text.slice(prefix.length);
+  }
+  return text;
+}
+
+function matchesAddressText(source, formatted, components, district, route) {
+  const input = stripAddressArea(source, components);
+  const output = stripAddressArea(formatted.replace(/^\d{3,6}(?=台灣)/u, ""), components);
+  return componentNames(route).some(road => {
+    const inputIndex = input.indexOf(road);
+    const outputIndex = output.indexOf(road);
+    if (inputIndex < 0 || outputIndex < 0 || input.slice(inputIndex) !== output.slice(outputIndex)) return false;
+    const inputVillage = input.slice(0, inputIndex);
+    const outputVillage = output.slice(0, outputIndex);
+    const isVillage = text => /^[\p{Script=Han}]{1,8}[村里]$/u.test(text) && !/[縣市區鄉鎮]/u.test(text);
+    if ((inputVillage && !isVillage(inputVillage)) || (outputVillage && !isVillage(outputVillage))) return false;
+    if (inputVillage && outputVillage && inputVillage !== outputVillage) return false;
+    const villages = components.filter(component => component.types?.some(type =>
+      type === "neighborhood" || type.startsWith("sublocality") || type.startsWith("administrative_area_level_")))
+      .flatMap(componentNames).filter(isVillage);
+    if (inputVillage && villages.length && !villages.includes(inputVillage)) return false;
+    // A village omitted by Google is optional only with an explicitly matching
+    // district. The road, house number and unit still have to match exactly.
+    if (inputVillage && !outputVillage && !villages.length &&
+        !componentNames(district).some(name => source.includes(name))) return false;
+    return true;
+  });
+}
+
 function matchesAddress(query, result) {
   if (result.partial_match || !hasText(result.place_id) || !hasText(result.formatted_address)) return false;
   const components = result.address_components || [];
@@ -101,13 +138,12 @@ function matchesAddress(query, result) {
   if (!types.some(type => ["street_address", "premise", "subpremise", "route"].includes(type))) return false;
   const source = normalize(query);
   const formatted = normalize(result.formatted_address);
-  // Geocoding has no inferred-component flag. Require explicit city/district and
-  // exact bidirectional coverage of routing-critical components instead.
+  // Administrative areas may be omitted, but supplied areas must agree.
   const city = components.find(component => component.types?.includes("administrative_area_level_1"));
   const district = components.find(isDistrict);
   const route = components.find(component => component.types?.includes("route"));
-  if (!city || !district || !route || !formatted.includes(source)) return false;
-  const critical = components.filter(component => component === city || isDistrict(component) ||
+  if (!city || !district || !route || !matchesAddressText(source, formatted, components, district, route)) return false;
+  const critical = components.filter(component =>
     component.types?.some(type => ["route", "street_number", "subpremise"].includes(type)));
   if (!critical.every(component => componentNames(component).some(name => {
     if (component.types?.includes("street_number")) {

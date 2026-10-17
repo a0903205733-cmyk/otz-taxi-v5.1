@@ -104,6 +104,23 @@ test("valid fare endpoints produce a quote only after validation", async t => {
   assert.equal(calls.confirmations.length, 0);
 });
 
+test("village-form address works for both ride confirmation and fare calculation", async t => {
+  const query = "屏東縣長治鄉德榮村下厝街91號";
+  const result = geocodeResult({ formatted_address: "台灣屏東縣長治鄉下厝街91號" });
+  result.address_components[2].long_name = "長治鄉";
+  result.address_components[3].long_name = "下厝街";
+  result.address_components[4].long_name = "91";
+  const { context, calls, event } = harness(t, { geocode: [result] });
+  await context.handleText(event(query));
+  assert.equal(calls.confirmations.length, 1);
+  assert.equal(calls.confirmations[0].pickup, query);
+  assert.equal(calls.orders.length, 0);
+  await context.handleText(event(`試算車資 ${query}到${TEMPLE}`));
+  assert.equal(calls.orders.length, 1);
+  assert.equal(calls.orders[0].pickup, query);
+  assert.equal(calls.orders[0].status, "awaiting_customer");
+});
+
 test("single pickup is allowed for rides but cannot produce a fare quote", async t => {
   const { context, calls, event } = harness(t);
   await context.handleText(event(TEMPLE));

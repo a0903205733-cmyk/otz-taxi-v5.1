@@ -36,8 +36,8 @@ test("exact address preserves input and verified coordinates", async t => {
 
 for (const [name, query, result] of [
   ["partial match", ADDRESS, geocodeResult({ partial_match: true })],
-  ["inferred city", "東港鎮中山路12號", geocodeResult()],
-  ["inferred district", "屏東縣中山路12號", geocodeResult()],
+  ["conflicting city", "台北市中山路12號", geocodeResult()],
+  ["conflicting district", "屏東縣潮州鎮中山路12號", geocodeResult()],
   ["inferred house number", "屏東縣東港鎮中山路", geocodeResult()],
   ["different road", "屏東縣東港鎮新中山路12號", geocodeResult()],
   ["different number", "屏東縣東港鎮中山路2號", geocodeResult()],
@@ -62,6 +62,36 @@ test("rejects inferred/replaced/unconfirmed critical components", async t => {
     t.mock.method(globalThis, "fetch", mapsFetch([], { geocode: [result] }));
     await assert.rejects(validateLocation(ADDRESS, "test-key"), { code: "LOCATION_UNVERIFIED" });
   }
+});
+
+test("omitted city and district are allowed only for a unique exact street address", async t => {
+  stub(t);
+  for (const query of ["東港鎮中山路12號", "屏東縣中山路12號", "中山路12號"]) {
+    const result = await validateLocation(query, "test-key");
+    assert.equal(result.query, query);
+    assert.equal(result.placeId, "address-12");
+  }
+  t.mock.method(globalThis, "fetch", mapsFetch([], { geocode: [geocodeResult(), geocodeResult({ place_id: "another-city" })] }));
+  await assert.rejects(validateLocation("中山路12號", "test-key"), { code: "LOCATION_UNVERIFIED" });
+});
+
+test("village formatting can differ while district, road and house number stay exact", async t => {
+  const query = "屏東縣長治鄉德榮村下厝街91號";
+  const result = geocodeResult({ formatted_address: "台灣屏東縣長治鄉下厝街91號" });
+  result.address_components[2].long_name = "長治鄉";
+  result.address_components[3].long_name = "下厝街";
+  result.address_components[4].long_name = "91";
+  stub(t, { geocode: [result] });
+  assert.equal((await validateLocation(query, "test-key")).query, query);
+  for (const invalid of [query.replace("長治鄉", "潮州鎮"), query.replace("下厝街", "上厝街"), query.replace("91號", "9號"), "德榮村下厝街91號"]) {
+    await assert.rejects(validateLocation(invalid, "test-key"), { code: "LOCATION_UNVERIFIED" });
+  }
+  result.formatted_address = `台灣${query}`;
+  result.address_components.push({ long_name: "德榮村", types: ["sublocality_level_2"] });
+  assert.equal((await validateLocation("長治鄉下厝街91號", "test-key")).placeId, result.place_id);
+  await assert.rejects(validateLocation(query.replace("德榮村", "其他村"), "test-key"), { code: "LOCATION_UNVERIFIED" });
+  result.formatted_address = "台灣屏東縣長治鄉下厝街91號";
+  await assert.rejects(validateLocation(query.replace("德榮村", "其他村"), "test-key"), { code: "LOCATION_UNVERIFIED" });
 });
 
 test("floor must be explicit and cannot be inferred from a house number", async t => {
