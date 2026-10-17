@@ -25,12 +25,19 @@
 
 ## 地名／建築物／景點：Places Text Search（New）
 
+- 已登錄的交通地標可用常見稱呼：左營高鐵、小港機場、枋寮／林邊／屏東／潮州火車站、東港碼頭（東琉線搭船處）。查詢正式名稱，但訂單保留客人原本的稱呼。
+- 別名仍須核對回傳地區、場所類型與名稱。火車站優先於一般轉運站；左營高鐵額外核對高鐵路105號，避免選到台鐵或捷運。東港碼頭對應東琉線船運服務中心，不對應旅行社售票處或小琉球端碼頭。
+- 別名清單見 `src/locations.js` 的 `LANDMARK_ALIASES`；不是任意模糊相似就放行，也沒有硬填座標。
 - 必須有 id（place_id）、displayName、formattedAddress、數值座標與台灣國別。
-- 名稱僅接受正規化後相同，或一方包含另一方且長度比例至少 90%。不自動替換「高醫」等簡稱為正式名稱。
+- 未登錄別名的名稱僅接受正規化後相同，或一方包含另一方且長度比例至少 90%。不自動替換「高醫」等未登錄簡稱為正式名稱。
 - 可去除原文中已明確提供、且與回傳地址一致的行政區前綴，再比較地標名稱。
 - 兩個不同 id 的候選同分，或最佳分數相差不超過 0.02，視為歧義。若還有下一頁，無法確認唯一性，拒絕此次辨識。
 - primaryType 必須在允許清單；未提供 primaryType 時才檢查 types。單有 establishment／point_of_interest 不算通過。
 - 允許清單明列在 `src/locations.js` 的 `PLACE_TYPES`，包含交通站點、醫療、學校、旅宿、餐飲、指定商業場所、宗教場所、景點、公共設施及行政地名；未列類型不接受。
+
+## 未寫縣市的鄉鎮補查
+
+輸入以「某某鄉」或「某某鎮」開頭且沒寫縣市，首次查詢沒有明確結果時，補上「屏東縣」再查一次。地址與地名皆適用，最多補查一次；已有縣市時不改寫。補查結果仍須符合相同驗證規則，不能把其他縣市的結果當成屏東；API 權限、網路或服務錯誤不會觸發補查。訂單保留客人原文，導航使用驗證結果座標。
 
 ## 失敗處理
 
@@ -45,5 +52,7 @@
 執行 `npm test`。測試以模擬 Google 回應驗證判斷與實際 LINE handler 的行為，不傳送 LINE 訊息、不建立正式訂單、不消耗 Google 查詢額度。
 
 官方參考：
+- https://www.thsrc.com.tw/ArticleContent/f2519629-5973-4d08-913b-479cce78a356
+- https://www.kia.gov.tw/TRANS.html
 - https://developers.google.com/maps/documentation/geocoding/requests-geocoding
 - https://developers.google.com/maps/documentation/places/web-service/text-search

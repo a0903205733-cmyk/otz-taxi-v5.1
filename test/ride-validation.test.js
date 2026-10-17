@@ -6,7 +6,7 @@ import { parseRideRequest, parseRideFormSubmission, classifyRideSchedule } from 
 import { validateRideLocations } from "../src/locations.js";
 import { getRoute } from "../src/maps.js";
 import { calculateFare, calculateDonggangTownFare, isDonggangTownTrip } from "../src/fare.js";
-import { ADDRESS, TEMPLE, geocodeResult, placeResult, mapsFetch } from "./fixtures/locations.js";
+import { ADDRESS, TEMPLE, geocodeResult, placeResult, mapsFetch, transportPlaces } from "./fixtures/locations.js";
 
 const source = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 
@@ -102,6 +102,16 @@ test("valid fare endpoints produce a quote only after validation", async t => {
   assert.equal(calls.orders[0].destination, TEMPLE);
   assert.equal(calls.replies.length, 1);
   assert.equal(calls.confirmations.length, 0);
+});
+
+test("common transport names work for both ride confirmation and fare quotes", async t => {
+  const { context, calls, event } = harness(t, { places: transportPlaces.map(item => item.place) });
+  for (const { query } of transportPlaces) await context.handleText(event(query));
+  assert.equal(calls.confirmations.length, transportPlaces.length);
+  await context.handleText(event("試算車資 左營高鐵到小港機場"));
+  assert.equal(calls.orders.length, 1);
+  assert.equal(calls.orders[0].pickup, "左營高鐵");
+  assert.equal(calls.orders[0].destination, "小港機場");
 });
 
 test("village-form address works for both ride confirmation and fare calculation", async t => {

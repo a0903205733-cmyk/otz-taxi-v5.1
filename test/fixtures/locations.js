@@ -41,3 +41,16 @@ export function mapsFetch(calls, { geocode = [geocodeResult()], places = [placeR
     throw new Error("Unexpected endpoint");
   };
 }
+
+export const transportPlaces = [
+  ["左營高鐵", "高鐵左營站", "高雄市左營區", "train_station"],
+  ["小港機場", "高雄國際機場", "高雄市小港區", "international_airport"],
+  ["枋寮火車站", "枋寮車站", "屏東縣枋寮鄉", "train_station"],
+  ["林邊火車站", "林邊車站", "屏東縣林邊鄉", "train_station"],
+  ["屏東火車站", "屏東車站", "屏東縣屏東市", "train_station"],
+  ["潮州火車站", "潮州車站", "屏東縣潮州鎮", "train_station"],
+  ["東港碼頭", "東琉線船運服務中心", "屏東縣東港鎮", "ferry_terminal"]
+].map(([query, name, area, type]) => ({ query, place: placeResult({
+  id: `transport-${query}`, displayName: { text: name }, formattedAddress: `${area}${query === "左營高鐵" ? "高鐵路105號" : "測試路1號"}`,
+  primaryType: type, types: [type], addressComponents: [{ longText: "台灣", shortText: "TW", types: ["country"] }]
+}) }));

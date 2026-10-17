@@ -22,10 +22,30 @@ const DISTRICT_TYPES = new Set([
   "locality", "administrative_area_level_2", "administrative_area_level_3",
   "sublocality", "sublocality_level_1"
 ]);
+const LANDMARK_ALIASES = [
+  {
+    name: "高鐵左營站", city: "高雄市", district: "左營區", types: ["train_station", "transit_station"],
+    resultNames: ["左營"], streetAddress: "高鐵路105號",
+    names: ["左營高鐵", "左營高鐵站", "高鐵左營", "高鐵左營站", "台灣高鐵左營站", "台灣高鐵左營車站"]
+  },
+  {
+    name: "高雄國際機場", city: "高雄市", district: "小港區", types: ["international_airport", "airport"],
+    names: ["小港機場", "高雄機場", "高雄小港機場", "小港國際機場", "高雄國際機場"]
+  },
+  {
+    name: "東琉線船運服務中心", city: "屏東縣", district: "東港鎮", types: ["ferry_terminal"],
+    names: ["東港碼頭", "東港渡船碼頭", "東琉線搭船處", "東琉線碼頭", "東琉線船運服務中心"]
+  },
+  ...[["枋寮", "枋寮鄉"], ["林邊", "林邊鄉"], ["屏東", "屏東市"], ["潮州", "潮州鎮"]].map(([name, district]) => ({
+    name: `${name}車站`, city: "屏東縣", district, types: ["train_station", "transit_station"],
+    names: [`${name}火車站`, `${name}車站`, `${name}站`, `台鐵${name}車站`, `台鐵${name}站`]
+  }))
+];
 
-function unverified(reason) {
+function unverified(reason, allowAreaRetry = false) {
   const error = new Error(`Location not verified: ${reason}`);
   error.code = "LOCATION_UNVERIFIED";
+  error.allowAreaRetry = allowAreaRetry;
   return error;
 }
 
@@ -60,9 +80,16 @@ export async function validateLocation(value, apiKey) {
   if (!candidate) throw unverified("not a location fragment");
   if (!apiKey) throw unverified("API key missing");
   try {
-    return candidate.kind === "address"
-      ? await geocodeAddress(candidate, apiKey)
-      : await searchPlace(candidate, apiKey);
+    const lookup = candidate.kind === "address" ? geocodeAddress : searchPlace;
+    try {
+      return await lookup(candidate, apiKey);
+    } catch (error) {
+      const townshipWithoutCounty = /^[\p{Script=Han}]{1,4}[鄉鎮]/u.test(candidate.query) &&
+        !/[縣市]/u.test(candidate.query.split(/[鄉鎮]/u)[0]);
+      if (!error.allowAreaRetry || !townshipWithoutCounty) throw error;
+      const result = await lookup({ ...candidate, query: `屏東縣${candidate.query}` }, apiKey);
+      return { ...result, query: candidate.query };
+    }
   } catch (error) {
     if (error.code === "LOCATION_UNVERIFIED") throw error;
     // Do not leak URLs containing API keys or provider error payloads into logs.
@@ -172,7 +199,7 @@ async function geocodeAddress(candidate, apiKey) {
   });
   if (!response.ok) throw unverified(`geocoding HTTP ${response.status}`);
   const payload = await response.json();
-  if (payload.status !== "OK" || !Array.isArray(payload.results)) throw unverified("geocoding rejected");
+  if (payload.status !== "OK" || !Array.isArray(payload.results)) throw unverified("geocoding rejected", payload.status === "ZERO_RESULTS");
   const candidates = payload.results.filter(result => matchesAddress(candidate.query, result)).map(result => ({
     query: candidate.query, kind: "address", placeId: result.place_id,
     formattedAddress: result.formatted_address,
@@ -180,7 +207,7 @@ async function geocodeAddress(candidate, apiKey) {
     components: result.address_components || []
   })).filter(result => inServiceArea(result.components, result.formattedAddress, result.location));
   const unique = [...new Map(candidates.map(result => [result.placeId, result])).values()];
-  if (unique.length !== 1) throw unverified("address missing, inferred, partial or ambiguous");
+  if (unique.length !== 1) throw unverified("address missing, inferred, partial or ambiguous", true);
   const { components, ...verified } = unique[0];
   return verified;
 }
@@ -213,29 +240,49 @@ function placeNameScore(query, place) {
   return score;
 }
 
+function landmarkAlias(query) {
+  const text = normalize(query);
+  return LANDMARK_ALIASES.find(alias => ["", alias.city, alias.district, alias.city + alias.district]
+    .some(prefix => alias.names.some(name => normalize(prefix + name) === text)));
+}
+
+function landmarkAliasScore(alias, place) {
+  const typeIndex = alias.types.findIndex(type => place.primaryType ? type === place.primaryType : place.types?.includes(type));
+  const address = normalize(place.formattedAddress);
+  if (typeIndex < 0 || !address.includes(normalize(alias.city + alias.district)) ||
+      (alias.streetAddress && !address.includes(normalize(alias.streetAddress))) ||
+      ![...alias.names, ...(alias.resultNames || [])].some(name => normalize(name) === normalize(place.displayName?.text))) return 0;
+  // Prefer a railway station over a generic transit entry for the same name.
+  return 1 - typeIndex * 0.05;
+}
+
 async function searchPlace(candidate, apiKey) {
+  const alias = landmarkAlias(candidate.query);
   const response = await fetch("https://places.googleapis.com/v1/places:searchText", {
     method: "POST",
     headers: {
       "Content-Type": "application/json", "X-Goog-Api-Key": apiKey,
       "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location,places.types,places.primaryType,places.addressComponents,nextPageToken"
     },
-    body: JSON.stringify({ textQuery: candidate.query, languageCode: "zh-TW", regionCode: "TW", pageSize: 20 }),
+    body: JSON.stringify({ textQuery: alias ? `${alias.city}${alias.district}${alias.name}` : candidate.query,
+      languageCode: "zh-TW", regionCode: "TW", pageSize: 20 }),
     signal: AbortSignal.timeout(TIMEOUT_MS)
   });
   if (!response.ok) throw unverified(`places HTTP ${response.status}`);
   const payload = await response.json();
   // Additional pages mean uniqueness cannot be established from this response.
-  if (payload.nextPageToken || !Array.isArray(payload.places)) throw unverified("incomplete place candidates");
-  const ranked = payload.places.map(place => ({ place, score: placeNameScore(candidate.query, place) }))
+  const places = payload.places === undefined && !payload.error ? [] : payload.places;
+  if (payload.nextPageToken || !Array.isArray(places)) throw unverified("incomplete place candidates", Boolean(payload.nextPageToken));
+  const ranked = places.map(place => ({ place,
+    score: alias ? landmarkAliasScore(alias, place) : placeNameScore(candidate.query, place) }))
     .filter(item => item.score >= NAME_THRESHOLD).sort((a, b) => b.score - a.score);
   const best = ranked[0];
-  if (!best) throw unverified("place name mismatch");
+  if (!best) throw unverified("place name mismatch", true);
   if (ranked.some(item => item !== best && item.place.id !== best.place.id &&
-      best.score - item.score <= NAME_TIE_MARGIN)) throw unverified("ambiguous place name");
+      best.score - item.score <= NAME_TIE_MARGIN)) throw unverified("ambiguous place name", true);
   const place = best.place;
-  const allowedType = place.primaryType ? PLACE_TYPES.has(place.primaryType) :
-    place.types?.some(type => PLACE_TYPES.has(type));
+  const allowedType = alias ? landmarkAliasScore(alias, place) > 0 : (place.primaryType ? PLACE_TYPES.has(place.primaryType) :
+    place.types?.some(type => PLACE_TYPES.has(type)));
   if (!hasText(place.id) || !hasText(place.formattedAddress) || !allowedType ||
       !inServiceArea(place.addressComponents || [], place.formattedAddress, place.location)) {
     throw unverified("place metadata, type or service area rejected");

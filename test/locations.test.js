@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { extractLocationCandidate, validateLocation, validateRideLocations } from "../src/locations.js";
 import { getRoute } from "../src/maps.js";
-import { ADDRESS, TEMPLE, geocodeResult, placeResult, mapsFetch } from "./fixtures/locations.js";
+import { ADDRESS, TEMPLE, geocodeResult, placeResult, mapsFetch, transportPlaces } from "./fixtures/locations.js";
 
 function stub(t, options) {
   const calls = [];
@@ -155,6 +155,94 @@ test("administrative prefix must agree with returned address", async t => {
 test("generic chain name cannot silently select a branch", async t => {
   stub(t, { places: [placeResult({ displayName: { text: "全家便利商店東港中山店" }, primaryType: "convenience_store" })] });
   await assert.rejects(validateLocation("全家", "test-key"), { code: "LOCATION_UNVERIFIED" });
+});
+
+for (const { query, place } of transportPlaces) {
+  test(`transport alias ${query} verifies the official place and preserves customer wording`, async t => {
+    const calls = stub(t, { places: [place] });
+    const result = await validateLocation(query, "test-key");
+    assert.equal(result.query, query);
+    assert.equal(result.placeId, place.id);
+    assert.ok(JSON.parse(calls[0].body).textQuery.includes(place.displayName.text));
+  });
+}
+
+test("transport aliases reject nearby shops, bus stops, conflicting areas and duplicate stations", async t => {
+  const { query, place } = transportPlaces[0];
+  for (const patch of [
+    { displayName: { text: "高鐵左營站租車店" } },
+    { primaryType: "bus_station", types: ["bus_station"] },
+    { formattedAddress: "台北市中正區高鐵路1號" },
+    { id: "" }, { location: null }
+  ]) {
+    t.mock.method(globalThis, "fetch", mapsFetch([], { places: [{ ...place, ...patch }] }));
+    await assert.rejects(validateLocation(query, "test-key"), { code: "LOCATION_UNVERIFIED" });
+  }
+  t.mock.method(globalThis, "fetch", mapsFetch([], { places: [place, { ...place, id: "second-station" }] }));
+  await assert.rejects(validateLocation(query, "test-key"), { code: "LOCATION_UNVERIFIED" });
+  t.mock.method(globalThis, "fetch", mapsFetch([], { places: [place] }));
+  await assert.rejects(validateLocation("台北市左營高鐵", "test-key"), { code: "LOCATION_UNVERIFIED" });
+  assert.equal((await validateLocation("高雄市左營高鐵", "test-key")).placeId, place.id);
+});
+
+test("railway entries outrank generic transit entries and HSR must use the station street address", async t => {
+  const station = transportPlaces.find(item => item.query === "潮州火車站");
+  stub(t, { places: [station.place, { ...station.place, id: "transit", primaryType: "transit_station" }] });
+  assert.equal((await validateLocation(station.query, "test-key")).placeId, station.place.id);
+  const hsr = { ...transportPlaces[0].place, displayName: { text: "左營" } };
+  t.mock.method(globalThis, "fetch", mapsFetch([], { places: [hsr] }));
+  assert.equal((await validateLocation("左營高鐵", "test-key")).placeId, hsr.id);
+  hsr.formattedAddress = "高雄市左營區站前北路1號";
+  await assert.rejects(validateLocation("左營高鐵", "test-key"), { code: "LOCATION_UNVERIFIED" });
+});
+
+test("Donggang pier and ferry boarding alias use the terminal, not a ticket office", async t => {
+  const terminal = transportPlaces.find(item => item.query === "東港碼頭").place;
+  stub(t, { places: [terminal, { ...terminal, id: "office", primaryType: "tour_agency" }] });
+  for (const query of ["東港碼頭", "東琉線搭船處"]) {
+    assert.equal((await validateLocation(query, "test-key")).placeId, terminal.id);
+  }
+});
+
+test("unresolved township street address retries once with Pingtung County", async t => {
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async url => {
+    calls.push(new URL(url).searchParams.get("address"));
+    return Response.json(calls.length === 1 ? { status: "ZERO_RESULTS", results: [] } : { status: "OK", results: [geocodeResult()] });
+  });
+  const query = "東港鎮中山路12號";
+  assert.equal((await validateLocation(query, "test-key")).query, query);
+  assert.deepEqual(calls, [query, `屏東縣${query}`]);
+});
+
+test("unresolved township place retries with Pingtung without accepting conflicting counties", async t => {
+  const calls = [];
+  const place = placeResult({ displayName: { text: "長治鄉" }, formattedAddress: "屏東縣長治鄉", primaryType: "administrative_area_level_2" });
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    calls.push(JSON.parse(init.body).textQuery);
+    return Response.json(calls.length === 1 ? {} : { places: [place] });
+  });
+  assert.equal((await validateLocation("長治鄉", "test-key")).query, "長治鄉");
+  assert.deepEqual(calls, ["長治鄉", "屏東縣長治鄉"]);
+  calls.length = 0;
+  place.formattedAddress = "台北市長治鄉";
+  place.addressComponents[1].longText = "台北市";
+  await assert.rejects(validateLocation("長治鄉", "test-key"), { code: "LOCATION_UNVERIFIED" });
+  assert.equal(calls.length, 2);
+});
+
+test("county retries do not override explicit counties or retry API outages", async t => {
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    calls.push({ url, init });
+    return Response.json({ places: [] });
+  });
+  await assert.rejects(validateLocation("宜蘭縣羅東鎮", "test-key"), { code: "LOCATION_UNVERIFIED" });
+  assert.equal(calls.length, 1);
+  calls.length = 0;
+  t.mock.method(globalThis, "fetch", async () => { calls.push("outage"); throw new Error("network unavailable"); });
+  await assert.rejects(validateLocation("長治鄉", "test-key"), { code: "LOCATION_UNVERIFIED" });
+  assert.equal(calls.length, 1);
 });
 
 test("unread pages, provider errors, missing key and malformed responses fail closed", async t => {
