@@ -130,6 +130,19 @@ test("valid fare endpoints produce a quote only after validation", async t => {
   assert.equal(calls.confirmations.length, 0);
 });
 
+test("scenic names enter ride confirmation and validated fare routes", async t => {
+  const names = ["測試沙灘", "測試觀景台"];
+  const places = names.map((name, index) => placeResult({ id: `scenic-${index}`,
+    displayName: { text: name }, primaryType: index ? "observation_deck" : "beach" }));
+  const { context, calls, event } = harness(t, { places });
+  for (const name of names) await context.handleText(event(name));
+  assert.equal(calls.confirmations.length, 2);
+  await context.handleText(event(`試算車資\n${names.join("\n")}`));
+  assert.equal(calls.orders.length, 1);
+  assert.equal(calls.orders[0].pickup, names[0]);
+  assert.equal(calls.orders[0].destination, names[1]);
+});
+
 test("common transport names work for both ride confirmation and fare quotes", async t => {
   const { context, calls, event } = harness(t, { places: transportPlaces.map(item => item.place) });
   for (const { query } of transportPlaces) await context.handleText(event(query));

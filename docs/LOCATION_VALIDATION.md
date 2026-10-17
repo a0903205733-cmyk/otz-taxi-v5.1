@@ -27,6 +27,9 @@
 
 ## 地名／建築物／景點：Places Text Search（New）
 
+- 景點名稱可直接進入叫車候選流程，包含風景區、海灘、觀景台、濕地、步道、吊橋、瀑布、燈塔、古蹟、露營區等名稱結尾。仍以 Google 場所資料驗證，不靠名稱結尾直接接受。
+- 景點類型補上 beach、scenic_spot、observation_deck、nature_preserve、historical_place、tourist_information_center、campground；不用門牌，但仍需完整場所地址、座標、唯一且吻合的名稱。叫車與試算共用此規則；point_of_interest 或 establishment 本身不算合格類型。
+
 - 已登錄的交通地標可用常見稱呼：左營高鐵、小港機場、枋寮／林邊／屏東／潮州火車站、東港碼頭（東琉線搭船處）。查詢正式名稱，但訂單保留客人原本的稱呼。
 - 別名仍須核對回傳地區、場所類型與名稱。火車站優先於一般轉運站；左營高鐵額外核對高鐵路105號，避免選到台鐵或捷運。東港碼頭對應東琉線船運服務中心，不對應旅行社售票處或小琉球端碼頭。
 - 別名清單見 `src/locations.js` 的 `LANDMARK_ALIASES`；不是任意模糊相似就放行，也沒有硬填座標。

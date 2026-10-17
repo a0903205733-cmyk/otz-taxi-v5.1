@@ -10,6 +10,30 @@ function stub(t, options) {
   return calls;
 }
 
+for (const type of ["tourist_attraction", "beach", "scenic_spot", "observation_deck", "nature_preserve", "historical_place", "tourist_information_center", "campground"]) {
+  test(`scenic places accept verified ${type} without a street number`, async t => {
+    const place = placeResult({ displayName: { text: "測試觀景台" }, primaryType: type,
+      types: [type], formattedAddress: "屏東縣東港鎮" });
+    stub(t, { places: [place] });
+    assert.equal((await validateLocation("測試觀景台", "test-key")).placeId, place.id);
+  });
+}
+
+test("scenic places still reject ambiguity, missing metadata and mismatched names", async t => {
+  const place = placeResult({ displayName: { text: "測試沙灘" }, primaryType: "beach", types: ["beach"] });
+  let places = [place];
+  t.mock.method(globalThis, "fetch", async () => Response.json({ places }));
+  for (const invalid of [
+    [{ ...place, location: null }], [{ ...place, formattedAddress: "" }],
+    [{ ...place, id: "" }], [{ ...place, displayName: { text: "別處沙灘" } }],
+    [place, { ...place, id: "another-beach" }],
+    [{ ...place, primaryType: "point_of_interest", types: ["point_of_interest"] }]
+  ]) {
+    places = invalid;
+    await assert.rejects(validateLocation("測試沙灘", "test-key"), { code: "LOCATION_UNVERIFIED" });
+  }
+});
+
 test("plain replies and non-location messages do not call Google", async t => {
   const calls = stub(t);
   for (const text of ["1", "2", "１２", "60/20/2", "好", "謝謝", "收到", "我家", "請問多少錢", "沒有車嗎", "我到了", "上車點"]) {

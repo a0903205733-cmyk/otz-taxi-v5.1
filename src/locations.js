@@ -5,6 +5,8 @@ const PLACE_TYPES = new Set([
   "transit_station", "ferry_terminal", "taxi_stand", "hospital", "doctor",
   "pharmacy", "school", "university", "library", "museum", "tourist_attraction",
   "park", "national_park", "amusement_park", "zoo", "aquarium", "stadium",
+  "beach", "scenic_spot", "observation_deck", "nature_preserve",
+  "historical_place", "tourist_information_center", "campground",
   "shopping_mall", "supermarket", "convenience_store", "department_store",
   "restaurant", "cafe", "bakery", "gas_station", "parking", "bank", "post_office",
   "police", "local_government_office", "city_hall", "lodging", "hotel", "motel",
