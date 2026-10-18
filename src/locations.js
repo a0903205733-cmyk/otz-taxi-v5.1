@@ -27,7 +27,8 @@ const DISTRICT_TYPES = new Set([
 const LANDMARK_ALIASES = [
   {
     name: "鎮海宮", city: "屏東縣", district: "東港鎮", types: ["buddhist_temple", "hindu_temple"],
-    names: ["東港鎮鎮海宮"], resultNames: ["鎮海宮", "東港鎮海宮"]
+    names: ["東港鎮鎮海宮"], resultNames: ["鎮海宮", "東港鎮海宮"],
+    verifiedTypeExceptions: [{ id: "ChIJizjuxIPhcTQRaP4VtvQb2UA", type: "association_or_organization", requiredType: "place_of_worship" }]
   },
   {
     name: "慈惠醫護管理專科學校", city: "屏東縣", district: "南州鄉", types: ["university", "school", "educational_institution"],
@@ -290,9 +291,11 @@ function landmarkAlias(query) {
 }
 
 function landmarkAliasScore(alias, place) {
-  const typeIndex = alias.types.findIndex(type => place.primaryType ? type === place.primaryType : place.types?.includes(type));
+  let typeIndex = alias.types.findIndex(type => place.primaryType ? type === place.primaryType : place.types?.includes(type));
+  if (typeIndex < 0 && alias.verifiedTypeExceptions?.some(exception =>
+    place.id === exception.id && place.primaryType === exception.type && place.types?.includes(exception.requiredType))) typeIndex = 0;
   const address = normalize(place.formattedAddress);
-  if (typeIndex < 0 || !address.includes(normalize(alias.city + alias.district)) ||
+  if (typeIndex < 0 || !address.includes(normalize(alias.city)) || !address.includes(normalize(alias.district)) ||
       (alias.streetAddress && !address.includes(normalize(alias.streetAddress))) ||
       ![...alias.names, ...(alias.resultNames || [])].some(name => normalize(name) === normalize(place.displayName?.text))) return 0;
   // Prefer a railway station over a generic transit entry for the same name.
