@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
-import { parseRideRequest, parseRideFormSubmission, classifyRideSchedule } from "../src/parser.js";
+import { parseRideRequest, parseRideFormSubmission, classifyRideSchedule, stripRouteFareQuestion } from "../src/parser.js";
 import { validateRideLocations } from "../src/locations.js";
 import { getRoute } from "../src/maps.js";
 import { calculateFare, calculateDonggangTownFare, isDonggangTownTrip } from "../src/fare.js";
@@ -45,7 +45,7 @@ function harness(t, options = {}) {
   const context = vm.createContext({
     console: { log() {}, warn() {}, error() {} },
     process: { env: { GOOGLE_MAPS_API_KEY: "test-key" } },
-    parseRideRequest, parseRideFormSubmission, classifyRideSchedule,
+    parseRideRequest, parseRideFormSubmission, classifyRideSchedule, stripRouteFareQuestion,
     validateRideLocations, getRoute, calculateFare, calculateDonggangTownFare, isDonggangTownTrip,
     isDispatchBotTagged: () => false,
     getPendingDispatchSearchPrompt: () => null,
@@ -198,6 +198,28 @@ test("Xishi to Linbian works for ride confirmation and fare calculation", async 
   await context.handleText(event("試算車資 西勢車站到林邊車站"));
   assert.equal(calls.orders.length, 1);
 });
+
+for (const fareIntent of [false, true]) {
+  test(`route price questions remove only the fare suffix (prior intent ${fareIntent})`, async t => {
+    const places = [placeResult({ id: "xishi", displayName: { text: "西勢火車站" }, primaryType: "train_station" }),
+      transportPlaces.find(item => item.query === "林邊火車站").place];
+    const { context, calls, event } = harness(t, { places, fareIntent });
+    for (const suffix of ["多少", "多少錢？", "要多少錢", "車資多少", "大概要多少錢？"]) {
+      await context.handleText(event(`西勢車站到林邊車站${suffix}`));
+    }
+    assert.equal(calls.orders.length, 5);
+    assert.equal(calls.confirmations.length, 0);
+    for (const order of calls.orders) {
+      assert.equal(order.pickup, "西勢車站");
+      assert.equal(order.destination, "林邊車站");
+      assert.equal(order.status, "awaiting_customer");
+    }
+    await context.handleText(event("西勢車站到謝謝多少"));
+    assert.equal(calls.orders.length, 5);
+    assert.equal(stripRouteFareQuestion("多少錢"), "多少錢");
+    assert.equal(stripRouteFareQuestion("西勢車站到多少錢餐廳"), "西勢車站到多少錢餐廳");
+  });
+}
 
 test("common transport names work for both ride confirmation and fare quotes", async t => {
   const { context, calls, event } = harness(t, { places: transportPlaces.map(item => item.place) });

@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { messagingApi } from "@line/bot-sdk";
 import {
-  parseRideRequest, parseRideFormSubmission, classifyRideSchedule
+  parseRideRequest, parseRideFormSubmission, classifyRideSchedule, stripRouteFareQuestion
 } from "./parser.js";
 import { getRoute, getPickupEtaMinutes } from "./maps.js";
 import { validateRideLocations } from "./locations.js";
@@ -524,7 +524,8 @@ function isFareQuoteKeyword(text) {
 }
 
 function isFareQuoteInlineRequest(text) {
-  return /^(?:試算車資|我(?:想|想要|要)試算車資)(?:[，,、:：\s]|$)/u.test(String(text || "").trim());
+  const input = String(text || "").trim();
+  return /^(?:試算車資|我(?:想|想要|要)試算車資)(?:[，,、:：\s]|$)/u.test(input) || stripRouteFareQuestion(input) !== input;
 }
 
 function rememberFareQuoteIntent(event) {

@@ -1,6 +1,13 @@
 const CHINESE_DIGITS = { 零: 0, 〇: 0, 一: 1, 二: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
 
+export function stripRouteFareQuestion(value) {
+  const text = String(value || "").trim();
+  if (!/(?:到|至|前往|→|➡|->|下車地點)/u.test(text)) return text;
+  return text.replace(/[，,\s]*(?:(?:車資|費用|價格)(?:大約|大概)?(?:是|要)?|(?:大約|大概)?要)?多少(?:錢|元)?[呢嗎啊]?\s*[?？。!！]*$/u, "").trim();
+}
+
 export function parseRideRequest(text) {
+  text = stripRouteFareQuestion(text);
   const formRoute = extractLabeledRideForm(text);
   const normalized = String(text || "")
     .replace(/[，、；]/g, ",")
@@ -47,6 +54,7 @@ export function parseRideRequest(text) {
 
 // 表單回覆只解析上下車地址；其餘指定欄位以原文附在叫車單，不另作判讀。
 export function parseRideFormSubmission(text) {
+  text = stripRouteFareQuestion(text);
   return {
     ...extractLabeledRideForm(text),
     rideDetails: extractRideFormDetails(text)
