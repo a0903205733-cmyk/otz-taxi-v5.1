@@ -27,8 +27,14 @@ const DISTRICT_TYPES = new Set([
 ]);
 const LANDMARK_ALIASES = [
   {
+    name: "東港東隆宮", city: "屏東縣", district: "東港鎮",
+    types: ["place_of_worship", "buddhist_temple", "association_or_organization"],
+    streetAddress: "東隆街21-1號",
+    names: ["東隆宮", "東港東隆宮", "東港鎮東隆宮"]
+  },
+  {
     name: "鎮海宮", city: "屏東縣", district: "東港鎮", types: ["association_or_organization", "buddhist_temple", "hindu_temple"],
-    names: ["東港鎮鎮海宮"], resultNames: ["鎮海宮", "東港鎮海宮"]
+    names: ["東港鎮鎮海宮", "鎮海宮"], resultNames: ["東港鎮海宮"]
   },
   {
     name: "慈惠醫護管理專科學校", city: "屏東縣", district: "南州鄉", types: ["university", "school", "educational_institution"],
@@ -48,7 +54,7 @@ const LANDMARK_ALIASES = [
   {
     name: "高鐵左營站", city: "高雄市", district: "左營區", types: ["train_station", "transit_station"],
     resultNames: ["左營"], streetAddress: "高鐵路105號",
-    names: ["左營高鐵", "左營高鐵站", "高鐵左營", "高鐵左營站", "台灣高鐵左營站", "台灣高鐵左營車站"]
+    names: ["高鐵", "左營高鐵", "左營高鐵站", "高鐵左營", "高鐵左營站", "台灣高鐵左營站", "台灣高鐵左營車站"]
   },
   {
     name: "高雄國際機場", city: "高雄市", district: "小港區", types: ["international_airport", "airport"],

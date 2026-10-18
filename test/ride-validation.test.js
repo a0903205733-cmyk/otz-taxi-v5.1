@@ -156,6 +156,23 @@ test("organizations enter ride and fare flows only after unique place validation
   assert.equal(calls.orders[0].pickup, query);
 });
 
+test("customer temple routes and bare HSR shorthand reach confirmation", async t => {
+  const places = [placeResult({ id: "donglong", displayName: { text: "東港東隆宮" },
+    formattedAddress: "928屏東縣東港鎮東隆里東隆街21-1號", primaryType: "place_of_worship" }),
+    placeResult({ primaryType: "association_or_organization",
+      formattedAddress: "42之, No. 5號鎮海路鎮海里東港鎮屏東縣92845" }),
+    transportPlaces.find(item => item.query === "左營高鐵").place];
+  const { context, calls, event } = harness(t, { places });
+  for (const text of ["東港東隆宮到東港鎮海宮", "東隆宮到高鐵", "鎮海宮到高鐵"]) {
+    await context.handleText(event(text));
+  }
+  assert.equal(calls.confirmations.length, 3);
+  for (const parsed of calls.confirmations.slice(1)) {
+    assert.equal(parsed.verifiedLocations.destination.placeId, places[2].id);
+  }
+  assert.equal(calls.orders.length, 0);
+});
+
 test("common transport names work for both ride confirmation and fare quotes", async t => {
   const { context, calls, event } = harness(t, { places: transportPlaces.map(item => item.place) });
   for (const { query } of transportPlaces) await context.handleText(event(query));
