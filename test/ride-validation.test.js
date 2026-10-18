@@ -186,6 +186,19 @@ test("religious places enter ride and fare flows without an alias", async t => {
   assert.equal(calls.orders[0].destination, names[1]);
 });
 
+test("Xishi to Linbian works for ride confirmation and fare calculation", async t => {
+  const places = [placeResult({ id: "xishi", displayName: { text: "西勢火車站" },
+    formattedAddress: "屏東縣竹田鄉西勢村西豐路2號", primaryType: "train_station" }),
+    transportPlaces.find(item => item.query === "林邊火車站").place];
+  const { context, calls, event } = harness(t, { places });
+  await context.handleText(event("西勢車站到林邊車站"));
+  assert.equal(calls.confirmations.length, 1);
+  assert.equal(calls.confirmations[0].pickup, "西勢車站");
+  assert.equal(calls.confirmations[0].destination, "林邊車站");
+  await context.handleText(event("試算車資 西勢車站到林邊車站"));
+  assert.equal(calls.orders.length, 1);
+});
+
 test("common transport names work for both ride confirmation and fare quotes", async t => {
   const { context, calls, event } = harness(t, { places: transportPlaces.map(item => item.place) });
   for (const { query } of transportPlaces) await context.handleText(event(query));

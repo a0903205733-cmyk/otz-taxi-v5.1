@@ -275,7 +275,10 @@ function nameSimilarity(left, right) {
 function placeNameScore(query, place) {
   const name = place.displayName?.text;
   if (!hasText(name)) return 0;
-  let score = nameSimilarity(query, name);
+  const isRailStation = place.primaryType ? place.primaryType === "train_station" : place.types?.includes("train_station");
+  const stationName = value => isRailStation ? String(value).replace(/火車站$/u, "車站") : value;
+  const compareName = value => nameSimilarity(stationName(value), stationName(name));
+  let score = compareName(query);
   let remainder = normalize(query);
   const address = normalize(place.formattedAddress);
   // Strip only administrative prefixes actually present in the returned address.
@@ -285,7 +288,7 @@ function placeNameScore(query, place) {
       .flatMap(componentNames).find(value => remainder.startsWith(value) && address.includes(value));
     if (!prefix) break;
     remainder = remainder.slice(prefix.length);
-    score = Math.max(score, nameSimilarity(remainder, name) * 0.99);
+    score = Math.max(score, compareName(remainder) * 0.99);
   }
   return score;
 }

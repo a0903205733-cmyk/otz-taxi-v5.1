@@ -11,6 +11,35 @@ function stub(t, options) {
   return calls;
 }
 
+test("rail station suffixes match nationwide without a per-station alias", async t => {
+  let places = [];
+  t.mock.method(globalThis, "fetch", async () => Response.json({ places }));
+  for (const station of ["西勢", "竹田", "台北", "台中", "花蓮", "台東"]) {
+    for (const [input, output] of [["車站", "火車站"], ["火車站", "車站"]]) {
+      places = [placeResult({ id: station, displayName: { text: station + output }, primaryType: "train_station" })];
+      const result = await validateLocation(station + input, "test-key");
+      assert.equal(result.placeId, station);
+      assert.equal(result.query, station + input);
+    }
+  }
+});
+
+test("rail suffix matching rejects other station names, bus stops and ambiguity", async t => {
+  const station = placeResult({ id: "xishi", displayName: { text: "西勢火車站" }, primaryType: "train_station" });
+  let places = [];
+  t.mock.method(globalThis, "fetch", async () => Response.json({ places }));
+  for (const invalid of [
+    [{ ...station, displayName: { text: "西勢火車站前店" } }],
+    [{ ...station, displayName: { text: "竹田火車站" } }],
+    [{ ...station, primaryType: "bus_stop" }],
+    [station, { ...station, id: "duplicate" }],
+    [{ ...station, location: null }]
+  ]) {
+    places = invalid;
+    await assert.rejects(validateLocation("西勢車站", "test-key"), { code: "LOCATION_UNVERIFIED" });
+  }
+});
+
 test("religious places still require unique names and complete metadata", async t => {
   const query = "測試宗祠";
   const place = placeResult({ displayName: { text: query }, primaryType: "place_of_worship", types: ["place_of_worship"] });
