@@ -1,6 +1,17 @@
 import { parseRideRequest } from "./parser.js";
 
 const DEFAULT_GROUP = "C24304391da7434a2bc0ff5d1dd8c9413";
+
+export function formatIntakeDispatch(order) {
+  if (order.ride_details !== "百回+30") return null;
+  return [
+    `訂單：01-${String(order.id).padStart(5, "0")}`,
+    "60/20/2",
+    `上車地點：${order.pickup}`,
+    order.destination && order.destination !== "尚未提供" ? `下車地點：${order.destination}` : "",
+    "百回+30"
+  ].filter(Boolean).join("\n");
+}
 let botCache = { token: "", id: "", expiresAt: 0 };
 
 export function isIntakeGroup(event) {

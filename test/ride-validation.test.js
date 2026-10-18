@@ -4,12 +4,36 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { parseRideRequest, parseRideFormSubmission, classifyRideSchedule, stripRouteFareQuestion } from "../src/parser.js";
 import { validateRideLocations } from "../src/locations.js";
-import { isIntakeGroup, parseIntakeMention } from "../src/group-intake.js";
+import { isIntakeGroup, parseIntakeMention, formatIntakeDispatch } from "../src/group-intake.js";
 import { getRoute } from "../src/maps.js";
 import { calculateFare, calculateDonggangTownFare, isDonggangTownTrip } from "../src/fare.js";
 import { ADDRESS, TEMPLE, geocodeResult, placeResult, mapsFetch, transportPlaces } from "./fixtures/locations.js";
 
 const source = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+
+test("intake dispatch uses 01 numbers and omits missing destinations", () => {
+  const order = { id: 123, pickup: TEMPLE, destination: "尚未提供", ride_details: "百回+30" };
+  assert.equal(formatIntakeDispatch(order), `訂單：01-00123\n60/20/2\n上車地點：${TEMPLE}\n百回+30`);
+  assert.equal(formatIntakeDispatch({ ...order, destination: ADDRESS }),
+    `訂單：01-00123\n60/20/2\n上車地點：${TEMPLE}\n下車地點：${ADDRESS}\n百回+30`);
+  assert.equal(formatIntakeDispatch({ ...order, ride_details: null }), null);
+});
+
+test("completion parser resolves both intake and regular order numbers", () => {
+  const context = vm.createContext({});
+  for (const name of ["parseDispatchCompletionText", "parseDispatchCompletionSegment"]) {
+    const start = source.indexOf(`function ${name}(`);
+    const rest = source.slice(start + 1);
+    const next = rest.search(/^(?:async )?function /m);
+    vm.runInContext(source.slice(start, start + 1 + next), context);
+  }
+  for (const number of ["01-00123", "OTZ-000123"]) {
+    const result = context.parseDispatchCompletionText(`訂單：${number}\n60/20/2\n9820/白/15`);
+    assert.equal(result.orderId, 123);
+    assert.equal(result.fourDigits, "9820");
+    assert.equal(result.twoDigits, "15");
+  }
+});
 
 function intakeEvent(text = `@OTZ ${TEMPLE}`) {
   return { type: "message", destination: "main-bot", replyToken: "test-reply",

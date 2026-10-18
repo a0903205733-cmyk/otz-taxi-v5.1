@@ -9,7 +9,7 @@ import {
 } from "./parser.js";
 import { getRoute, getPickupEtaMinutes } from "./maps.js";
 import { validateRideLocations } from "./locations.js";
-import { isIntakeGroup, getMainBotId, parseIntakeMention } from "./group-intake.js";
+import { isIntakeGroup, getMainBotId, parseIntakeMention, formatIntakeDispatch } from "./group-intake.js";
 import { calculateDonggangTownFare, calculateFare, isDonggangTownTrip } from "./fare.js";
 import { quoteFlex, orderNo } from "./messages.js";
 import {
@@ -935,12 +935,13 @@ function isOnlyDispatchBotMention(text) {
 
 function parseDispatchCompletionText(text) {
   const source = String(text || "");
-  const orderMatch = source.match(/OTZ[-\s]?0*(\d{1,6})/iu) || source.match(/訂單[：:\s#]*0*(\d{1,6})/u);
+  const orderMatch = source.match(/(?:OTZ[-\s]?|01-)0*(\d{1,6})(?!\d)/iu) || source.match(/訂單[：: \t#]*0*(\d{1,6})(?![\d-])/u);
   const colorPattern = "(黑色|白色|灰色|銀色|紅色|藍色|綠色|黃色|金色|橘色|紫色|棕色|咖啡色|粉紅色|黑|白|灰|銀|紅|藍|綠|黃|金|橘|紫|棕|咖啡|粉紅)";
   const sanitized = source
     .replace(/60\s*\/\s*20\s*\/\s*2/gu, " ")
     .replace(/OTZ[-\s]?0*\d{1,6}/giu, " ")
-    .replace(/訂單[：:\s#]*0*\d{1,6}/gu, " ");
+    .replace(/01-0*\d{1,6}(?!\d)/gu, " ")
+    .replace(/訂單[：: \t#]*0*\d{1,6}/gu, " ");
   const completion = parseDispatchCompletionSegment(sanitized, colorPattern);
   return {
     orderId: orderMatch ? Number(orderMatch[1]) : null,
@@ -2078,7 +2079,7 @@ async function pushOrderToDispatchGroup(order) {
   const groupIds = getDispatchGroupIds();
   if (!groupIds.length || !order) return false;
 
-  const text = normalizeLineText([
+  const text = normalizeLineText(formatIntakeDispatch(order) || [
     `訂單:${orderNo(order.id)}`,
     formatRideRequestTemplate({
       pickup: order.pickup,
