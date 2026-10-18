@@ -27,6 +27,8 @@
 
 ## 地名／建築物／景點：Places Text Search（New）
 
+- 協會／組織（association_or_organization）全面納入可接受的場所類型，不限定特定地點 ID。協會、公會、工會、基金會等名稱可進入候選流程；仍須核對名稱、完整地址、座標、服務區域與唯一性，並非只要含「協會」就直接接受。
+
 - 景點名稱可直接進入叫車候選流程，包含風景區、海灘、觀景台、濕地、步道、吊橋、瀑布、燈塔、古蹟、露營區等名稱結尾。仍以 Google 場所資料驗證，不靠名稱結尾直接接受。
 - 景點類型補上 beach、scenic_spot、observation_deck、nature_preserve、historical_place、tourist_information_center、campground；不用門牌，但仍需完整場所地址、座標、唯一且吻合的名稱。叫車與試算共用此規則；point_of_interest 或 establishment 本身不算合格類型。
 

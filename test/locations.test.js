@@ -11,6 +11,23 @@ function stub(t, options) {
   return calls;
 }
 
+test("all organization IDs are eligible but incomplete or ambiguous places are rejected", async t => {
+  const query = "測試發展協會";
+  const organization = placeResult({ id: "any-organization", displayName: { text: query },
+    primaryType: "association_or_organization", types: ["association_or_organization"] });
+  let places = [organization];
+  t.mock.method(globalThis, "fetch", async () => Response.json({ places }));
+  assert.equal((await validateLocation(query, "test-key")).placeId, organization.id);
+  for (const invalid of [
+    [organization, { ...organization, id: "other" }],
+    [{ ...organization, location: null }], [{ ...organization, formattedAddress: "" }],
+    [{ ...organization, displayName: { text: "另一個協會" } }]
+  ]) {
+    places = invalid;
+    await assert.rejects(validateLocation(query, "test-key"), { code: "LOCATION_UNVERIFIED" });
+  }
+});
+
 test("repairs only corroborated postal suffixes without bypassing address validation", async t => {
   const query = "屏東縣崁頂鄉園寮村南州路1-2號";
   let result = postalSuffixResult();
@@ -187,7 +204,7 @@ test("Donggang township Zhenhai temple alias verifies names and district", async
   await assert.rejects(validateLocation("東港鎮鎮海宮", "test-key"), { code: "LOCATION_UNVERIFIED" });
 });
 
-test("actual Zhenhai temple organization classification is scoped to its verified place ID", async t => {
+test("Zhenhai temple organization classification still requires matching name and area", async t => {
   let place = placeResult({ id: "ChIJizjuxIPhcTQRaP4VtvQb2UA",
     formattedAddress: "42之, No. 5號鎮海路鎮海里東港鎮屏東縣92845",
     primaryType: "association_or_organization", types: ["tourist_attraction", "place_of_worship", "association_or_organization"] });
@@ -195,7 +212,6 @@ test("actual Zhenhai temple organization classification is scoped to its verifie
   t.mock.method(globalThis, "fetch", async () => Response.json({ places: [place] }));
   assert.equal((await validateLocation("東港鎮鎮海宮", "test-key")).placeId, original.id);
   for (const patch of [
-    { id: "different-organization" }, { types: ["association_or_organization"] },
     { formattedAddress: "高雄市旗津區鎮海路1號" }, { displayName: { text: "東港鎮海宮大營" } }
   ]) {
     place = { ...original, ...patch };

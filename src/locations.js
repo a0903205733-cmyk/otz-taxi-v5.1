@@ -13,6 +13,7 @@ const PLACE_TYPES = new Set([
   "hostel", "resort_hotel", "guest_house", "buddhist_temple", "hindu_temple",
   "church", "mosque", "synagogue", "cultural_landmark", "historical_landmark",
   "community_center", "convention_center", "sports_complex", "karaoke",
+  "association_or_organization",
   "apartment_building", "apartment_complex", "corporate_office",
   "locality", "sublocality", "administrative_area_level_1",
   "administrative_area_level_2", "administrative_area_level_3"
@@ -26,9 +27,8 @@ const DISTRICT_TYPES = new Set([
 ]);
 const LANDMARK_ALIASES = [
   {
-    name: "鎮海宮", city: "屏東縣", district: "東港鎮", types: ["buddhist_temple", "hindu_temple"],
-    names: ["東港鎮鎮海宮"], resultNames: ["鎮海宮", "東港鎮海宮"],
-    verifiedTypeExceptions: [{ id: "ChIJizjuxIPhcTQRaP4VtvQb2UA", type: "association_or_organization", requiredType: "place_of_worship" }]
+    name: "鎮海宮", city: "屏東縣", district: "東港鎮", types: ["association_or_organization", "buddhist_temple", "hindu_temple"],
+    names: ["東港鎮鎮海宮"], resultNames: ["鎮海宮", "東港鎮海宮"]
   },
   {
     name: "慈惠醫護管理專科學校", city: "屏東縣", district: "南州鄉", types: ["university", "school", "educational_institution"],
@@ -291,9 +291,7 @@ function landmarkAlias(query) {
 }
 
 function landmarkAliasScore(alias, place) {
-  let typeIndex = alias.types.findIndex(type => place.primaryType ? type === place.primaryType : place.types?.includes(type));
-  if (typeIndex < 0 && alias.verifiedTypeExceptions?.some(exception =>
-    place.id === exception.id && place.primaryType === exception.type && place.types?.includes(exception.requiredType))) typeIndex = 0;
+  const typeIndex = alias.types.findIndex(type => place.primaryType ? type === place.primaryType : place.types?.includes(type));
   const address = normalize(place.formattedAddress);
   if (typeIndex < 0 || !address.includes(normalize(alias.city)) || !address.includes(normalize(alias.district)) ||
       (alias.streetAddress && !address.includes(normalize(alias.streetAddress))) ||

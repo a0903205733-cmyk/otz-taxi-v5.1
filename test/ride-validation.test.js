@@ -143,6 +143,19 @@ test("scenic names enter ride confirmation and validated fare routes", async t =
   assert.equal(calls.orders[0].destination, names[1]);
 });
 
+test("organizations enter ride and fare flows only after unique place validation", async t => {
+  const query = "測試發展協會";
+  const organization = placeResult({ id: "organization", displayName: { text: query },
+    primaryType: "association_or_organization", types: ["association_or_organization"] });
+  const { context, calls, event } = harness(t, { places: [organization, placeResult()] });
+  await context.handleText(event(query));
+  assert.equal(calls.confirmations.length, 1);
+  assert.equal(calls.confirmations[0].pickup, query);
+  await context.handleText(event(`試算車資 ${query}到${TEMPLE}`));
+  assert.equal(calls.orders.length, 1);
+  assert.equal(calls.orders[0].pickup, query);
+});
+
 test("common transport names work for both ride confirmation and fare quotes", async t => {
   const { context, calls, event } = harness(t, { places: transportPlaces.map(item => item.place) });
   for (const { query } of transportPlaces) await context.handleText(event(query));
