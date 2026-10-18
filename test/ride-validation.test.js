@@ -41,6 +41,41 @@ function intakeEvent(text = `@OTZ ${TEMPLE}`) {
     message: { type: "text", text, mention: { mentionees: [{ type: "user", userId: "main-bot", index: 0, length: 4 }] } } };
 }
 
+test("intake completion sends sorted driver data to the original group through main LINE client", async () => {
+  const pushes = [];
+  let savedSource = intakeEvent().source;
+  const context = vm.createContext({
+    formatIntakeDispatch, isIntakeGroup,
+    getIntakeSource: async () => savedSource,
+    line: { pushMessage: async message => pushes.push(message) },
+    orderNo: id => `OTZ-${String(id).padStart(6, "0")}`,
+    normalizeLineText: text => text
+  });
+  for (const name of ["notifyCustomer", "parseDispatchCompletionText", "parseDispatchCompletionSegment"]) {
+    const start = source.indexOf(`${name === "notifyCustomer" ? "async " : ""}function ${name}(`);
+    const next = source.slice(start + 1).search(/^(?:async )?function /m);
+    vm.runInContext(source.slice(start, start + 1 + next), context);
+  }
+  const order = { id: 123, customer_line_id: "customer", ride_details: "百回+30" };
+  for (const segment of ["9820/15/白", "白/9820/5", "準時/白/9820"]) {
+    const completion = context.parseDispatchCompletionText(`訂單：01-00123\n60/20/2\n百回+30\n${segment}\n@派單機器人2`);
+    await context.notifyCustomer(order, "complete", { dispatchCompletion: completion });
+    const sent = pushes.at(-1);
+    assert.equal(sent.to, savedSource.groupId);
+    assert.ok(sent.messages[0].text.includes("訂單：01-00123"));
+    assert.ok(sent.messages[0].text.includes(`9820/白/${completion.twoDigits}`));
+  }
+  const completion = { fourDigits: "9820", color: "白", twoDigits: "15" };
+  await context.notifyCustomer({ ...order, ride_details: null }, "complete", { dispatchCompletion: completion });
+  assert.equal(pushes.at(-1).to, "customer");
+  assert.ok(pushes.at(-1).messages[0].text.includes("OTZ-000123"));
+  for (const invalid of [null, { type: "group", groupId: "unrelated" }]) {
+    savedSource = invalid;
+    await assert.rejects(context.notifyCustomer(order, "complete", { dispatchCompletion: completion }), /source group/);
+  }
+  assert.equal(pushes.length, 4);
+});
+
 test("intake group only accepts real mentions of the receiving main bot", () => {
   const event = intakeEvent();
   assert.equal(parseIntakeMention(event, "main-bot").pickup, TEMPLE);
@@ -63,6 +98,8 @@ test("intake group copies addresses without Google and only acknowledges with �
   await context.handleLineEvent(intakeEvent());
   assert.equal(calls.orders.length, 1);
   assert.equal(calls.orders[0].status, "pending");
+  assert.equal(calls.intakeSource.id, 123);
+  assert.equal(calls.intakeSource.source.groupId, intakeEvent().source.groupId);
   assert.equal(calls.orders[0].ride_details, "百回+30");
   assert.equal(calls.orders[0].pickup, TEMPLE);
   assert.equal(calls.orders[0].destination, "尚未提供");
@@ -152,6 +189,7 @@ function harness(t, options = {}) {
     rememberFareQuoteIntent: () => { fareIntent = true; },
     clearFareQuoteIntent: () => { fareIntent = false; },
     listSettings: async () => ({}),
+    saveIntakeSource: async (id, source) => { calls.intakeSource = { id, source }; },
     upsertCustomerByLineId: async () => { calls.customerWrites += 1; return {}; },
     getRecentRideDispatch: () => null,
     rememberRecentRideDispatch() {},

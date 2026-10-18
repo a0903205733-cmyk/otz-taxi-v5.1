@@ -225,3 +225,19 @@ export async function createAuditLog(values) {
   const { error } = await db.from("audit_logs").insert(values);
   if (error) console.error("Audit log error:", error);
 }
+
+export async function saveIntakeSource(orderId, source) {
+  const { error } = await db.from("audit_logs").insert({
+    actor_type: "line", action: "order.intake_source", entity_type: "order",
+    entity_id: String(orderId), details: { source }
+  });
+  if (error) throw error;
+}
+
+export async function getIntakeSource(orderId) {
+  const { data, error } = await db.from("audit_logs").select("details")
+    .eq("action", "order.intake_source").eq("entity_type", "order")
+    .eq("entity_id", String(orderId)).order("created_at", { ascending: true }).limit(1);
+  if (error) throw error;
+  return data?.[0]?.details?.source || null;
+}

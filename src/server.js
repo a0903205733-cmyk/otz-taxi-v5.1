@@ -20,7 +20,7 @@ import {
   subscribeToFleetChanges, listSettings, updateSetting,
   listCustomers, updateCustomer, upsertCustomerByLineId,
   createPayment, createReceipt, getReceiptByOrderId,
-  listAuditLogs, createAuditLog
+  listAuditLogs, createAuditLog, saveIntakeSource, getIntakeSource
 } from "./db.js";
 
 dotenv.config();
@@ -454,6 +454,7 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings, 
     clearFareQuoteIntent(event);
 
     if (!isFareQuoteRequest) {
+      if (directIntake) await saveIntakeSource(order.id, event.source);
       const dispatched = await pushOrderToDispatchGroup(order).catch(error => {
         logLinePushError("Direct order dispatch group push failed", error);
         return false;
@@ -877,8 +878,9 @@ async function handleDispatchBotTagged(event, incomingText) {
 
   try {
     const order = await getOrder(completion.orderId);
+    const displayOrderNo = formatIntakeDispatch(order) ? `01-${String(order.id).padStart(5, "0")}` : orderNo(order.id);
     if (order.status === "completed" || order.completed_at) {
-      return reply(event.replyToken, `此訂單已記錄完成 ${orderNo(order.id)}，不接受第二位回覆。`);
+      return reply(event.replyToken, `此訂單已記錄完成 ${displayOrderNo}，不接受第二位回覆。`);
     }
 
     clearDispatchSearchPromptForOrder(order.id);
@@ -911,7 +913,7 @@ async function handleDispatchBotTagged(event, incomingText) {
       event.replyToken,
       event.source?.userId || "",
       nickname || "回覆者",
-      `"出發"已紀錄完成 ${orderNo(order.id)}\n` +
+      `"出發"已紀錄完成 ${displayOrderNo}\n` +
         `車牌/顏色/抵達時間：${completion.fourDigits}/${completion.color}/${completion.twoDigits}\n` +
         "加入回金群回報：https://lin.ee/OO0qPnJ"
     );
@@ -1825,6 +1827,20 @@ async function filterNearbyPickupOrders(driver, orders, { bypassCache = false } 
 }
 
 async function notifyCustomer(order, action, options = {}) {
+  if (action === "complete" && options.dispatchCompletion && formatIntakeDispatch(order)) {
+    const source = await getIntakeSource(order.id);
+    if (!source || !isIntakeGroup({ source })) {
+      throw new Error("Intake order source group missing or no longer allowed");
+    }
+    const completion = options.dispatchCompletion;
+    return line.pushMessage({
+      to: source.groupId,
+      messages: [{ type: "text", text:
+        `提供司機車訊\n訂單：01-${String(order.id).padStart(5, "0")}\n` +
+        `車牌/顏色/抵達時間：${completion.fourDigits}/${completion.color}/${completion.twoDigits}\n` +
+        "感謝使用 OTZ 車隊。" }]
+    });
+  }
   if (!order.customer_line_id) return;
 
   let text = "";
