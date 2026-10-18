@@ -58,7 +58,7 @@ test("intake group only accepts real mentions of the receiving main bot", () => 
   assert.equal(parseIntakeMention(intakeEvent("@OTZ"), "main-bot"), null);
 });
 
-test("intake group creates verified orders directly with the fixed note", async t => {
+test("intake group copies addresses without Google and only acknowledges with 好", async t => {
   const { context, calls } = harness(t);
   await context.handleLineEvent(intakeEvent());
   assert.equal(calls.orders.length, 1);
@@ -67,17 +67,24 @@ test("intake group creates verified orders directly with the fixed note", async 
   assert.equal(calls.orders[0].pickup, TEMPLE);
   assert.equal(calls.orders[0].destination, "尚未提供");
   assert.equal(calls.confirmations.length, 0);
+  assert.deepEqual(calls.replies, ["好"]);
+  assert.equal(calls.orders[0].pickup_latitude, null);
   await context.handleLineEvent(intakeEvent(`@OTZ 上車地點：${TEMPLE}\n下車地點：${ADDRESS}`));
   assert.equal(calls.orders.length, 2);
   assert.equal(calls.orders[1].destination, ADDRESS);
+  await context.handleLineEvent(intakeEvent("@OTZ 上車地點：自訂集合點\n下車地點：另一個集合點"));
+  assert.equal(calls.orders[2].pickup, "自訂集合點");
+  assert.equal(calls.orders[2].destination, "另一個集合點");
+  assert.equal(calls.google.length, 0);
+  assert.deepEqual(calls.replies, ["好", "好", "好"]);
 });
 
-test("intake group ignores untagged messages and invalid addresses but permits ID lookup", async t => {
+test("intake group ignores untagged and empty messages but permits ID lookup", async t => {
   const { context, calls } = harness(t);
   const untagged = intakeEvent();
   delete untagged.message.mention;
   await context.handleLineEvent(untagged);
-  await context.handleLineEvent(intakeEvent("@OTZ 謝謝"));
+  await context.handleLineEvent(intakeEvent("@OTZ"));
   const dispatch = intakeEvent();
   dispatch.destination = "a1";
   await context.handleLineEvent(dispatch);

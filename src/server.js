@@ -198,7 +198,7 @@ async function handleLineEvent(event) {
     if (isIntakeGroup(event)) {
       const parsed = parseIntakeMention(event, await getMainBotId());
       if (!parsed) return;
-      return createLineRideOrder(event, parsed, false, await listSettings());
+      return createLineRideOrder(event, parsed, false, await listSettings(), { intake: true });
     }
 
     if (BOT_RESUME_KEYWORDS.has(incomingText)) {
@@ -395,14 +395,16 @@ async function handleText(event) {
   return createLineRideOrder(event, parsed, isFareQuoteRequest, settings);
 }
 
-async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings) {
-  parsed = await getVerifiedRideInput(parsed);
+async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings, options = {}) {
+  const directIntake = options.intake === true && isIntakeGroup(event) && !isFareQuoteRequest;
+  if (!directIntake) parsed = await getVerifiedRideInput(parsed);
+  if (directIntake && !String(parsed?.pickup || "").trim()) return;
   if (!parsed || (isFareQuoteRequest && !parsed.destination)) return;
   try {
     const schedule = classifyRideSchedule(parsed.rideTime);
     const hasDestination = Boolean(parsed.destination);
     const destination = hasDestination ? parsed.destination : "尚未提供";
-    const route = hasDestination
+    const route = hasDestination && !directIntake
       ? await getRoute(
         parsed.pickup,
         destination,
@@ -412,7 +414,7 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings) 
       : {
         distanceKm: 0,
         durationMin: 0,
-        originLocation: parsed.verifiedLocations.pickup.location,
+        originLocation: directIntake ? null : parsed.verifiedLocations.pickup.location,
         destinationLocation: null
       };
 
@@ -457,6 +459,8 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings) 
         return false;
       });
       if (dispatched) rememberRecentRideDispatch(event, order);
+
+      if (directIntake) return reply(event.replyToken, "好");
 
       return reply(
         event.replyToken,
