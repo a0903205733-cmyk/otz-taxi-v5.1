@@ -11,6 +11,22 @@ function stub(t, options) {
   return calls;
 }
 
+test("religious places still require unique names and complete metadata", async t => {
+  const query = "測試宗祠";
+  const place = placeResult({ displayName: { text: query }, primaryType: "place_of_worship", types: ["place_of_worship"] });
+  let places = [place];
+  t.mock.method(globalThis, "fetch", async () => Response.json({ places }));
+  assert.equal((await validateLocation(query, "test-key")).placeId, place.id);
+  for (const invalid of [
+    [place, { ...place, id: "another" }], [{ ...place, id: "" }],
+    [{ ...place, formattedAddress: "" }], [{ ...place, location: null }],
+    [{ ...place, displayName: { text: "另一間宗祠" } }]
+  ]) {
+    places = invalid;
+    await assert.rejects(validateLocation(query, "test-key"), { code: "LOCATION_UNVERIFIED" });
+  }
+});
+
 test("all organization IDs are eligible but incomplete or ambiguous places are rejected", async t => {
   const query = "測試發展協會";
   const organization = placeResult({ id: "any-organization", displayName: { text: query },

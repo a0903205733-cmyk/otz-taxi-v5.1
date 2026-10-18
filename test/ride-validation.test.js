@@ -173,6 +173,19 @@ test("customer temple routes and bare HSR shorthand reach confirmation", async t
   assert.equal(calls.orders.length, 0);
 });
 
+test("religious places enter ride and fare flows without an alias", async t => {
+  const names = ["測試寺", "測試教堂", "測試清真寺", "測試宗祠", "測試精舍"];
+  const places = names.map((name, index) => placeResult({ id: `religion-${index}`,
+    displayName: { text: name }, primaryType: "place_of_worship", types: ["place_of_worship"] }));
+  const { context, calls, event } = harness(t, { places });
+  for (const name of names) await context.handleText(event(name));
+  assert.equal(calls.confirmations.length, names.length);
+  await context.handleText(event(`試算車資 ${names[0]}到${names[1]}`));
+  assert.equal(calls.orders.length, 1);
+  assert.equal(calls.orders[0].pickup, names[0]);
+  assert.equal(calls.orders[0].destination, names[1]);
+});
+
 test("common transport names work for both ride confirmation and fare quotes", async t => {
   const { context, calls, event } = harness(t, { places: transportPlaces.map(item => item.place) });
   for (const { query } of transportPlaces) await context.handleText(event(query));

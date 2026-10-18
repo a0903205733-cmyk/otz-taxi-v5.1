@@ -11,7 +11,7 @@ const PLACE_TYPES = new Set([
   "restaurant", "cafe", "bakery", "gas_station", "parking", "bank", "post_office",
   "police", "local_government_office", "city_hall", "lodging", "hotel", "motel",
   "hostel", "resort_hotel", "guest_house", "buddhist_temple", "hindu_temple",
-  "church", "mosque", "synagogue", "cultural_landmark", "historical_landmark",
+  "church", "mosque", "synagogue", "place_of_worship", "cultural_landmark", "historical_landmark",
   "community_center", "convention_center", "sports_complex", "karaoke",
   "association_or_organization",
   "apartment_building", "apartment_complex", "corporate_office",
@@ -33,7 +33,7 @@ const LANDMARK_ALIASES = [
     names: ["東隆宮", "東港東隆宮", "東港鎮東隆宮"]
   },
   {
-    name: "鎮海宮", city: "屏東縣", district: "東港鎮", types: ["association_or_organization", "buddhist_temple", "hindu_temple"],
+    name: "鎮海宮", city: "屏東縣", district: "東港鎮", types: ["association_or_organization", "buddhist_temple", "hindu_temple", "place_of_worship"],
     names: ["東港鎮鎮海宮", "鎮海宮"], resultNames: ["東港鎮海宮"]
   },
   {

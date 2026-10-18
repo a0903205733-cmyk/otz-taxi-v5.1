@@ -144,7 +144,8 @@ function isLikelyLocation(value) {
   const poi = /(?:醫院|診所|車站|高鐵|機場|碼頭|漁港|港口|KTV|ktv|釣蝦場|學校|大學|宮|廟|市場|夜市|飯店|旅館|民宿|餐廳|超商|便利商店|銀行|郵局|分局|分駐所|派出所|公園|館|店|中心)/u;
   const scenic = /(?:風景區|遊憩區|遊樂區|遊樂園|觀景台|觀景臺|海灘|沙灘|海水浴場|濕地|步道|吊橋|瀑布|燈塔|古蹟|紀念碑|露營區|遊客中心|生態園區|自然保護區)$/u;
   const organization = /(?:協會|公會|工會|基金會|商會|學會|聯合會|促進會|發展會)$/u;
-  return known.test(text) || address.test(text) || poi.test(text) || scenic.test(text) || organization.test(text);
+  const religious = /(?:寺|寺院|庵|祠|教堂|教會|清真寺|佛堂|道院|精舍|宗祠)$/u;
+  return known.test(text) || address.test(text) || poi.test(text) || scenic.test(text) || organization.test(text) || religious.test(text);
 }
 
 function extractRideTime(text) {
