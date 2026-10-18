@@ -4,11 +4,73 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { parseRideRequest, parseRideFormSubmission, classifyRideSchedule, stripRouteFareQuestion } from "../src/parser.js";
 import { validateRideLocations } from "../src/locations.js";
+import { isIntakeGroup, parseIntakeMention } from "../src/group-intake.js";
 import { getRoute } from "../src/maps.js";
 import { calculateFare, calculateDonggangTownFare, isDonggangTownTrip } from "../src/fare.js";
 import { ADDRESS, TEMPLE, geocodeResult, placeResult, mapsFetch, transportPlaces } from "./fixtures/locations.js";
 
 const source = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+
+function intakeEvent(text = `@OTZ ${TEMPLE}`) {
+  return { type: "message", destination: "main-bot", replyToken: "test-reply",
+    source: { type: "group", groupId: "C24304391da7434a2bc0ff5d1dd8c9413", userId: "sender" },
+    message: { type: "text", text, mention: { mentionees: [{ type: "user", userId: "main-bot", index: 0, length: 4 }] } } };
+}
+
+test("intake group only accepts real mentions of the receiving main bot", () => {
+  const event = intakeEvent();
+  assert.equal(parseIntakeMention(event, "main-bot").pickup, TEMPLE);
+  for (const change of [
+    e => { e.destination = "a1"; },
+    e => { e.source.groupId = "other-group"; },
+    e => { e.message.mention.mentionees[0].userId = "a1"; },
+    e => { delete e.message.mention; },
+    e => { e.message.mention.mentionees[0].length = 999; }
+  ]) {
+    const altered = structuredClone(event);
+    change(altered);
+    assert.equal(parseIntakeMention(altered, "main-bot"), null);
+  }
+  assert.equal(parseIntakeMention(intakeEvent("@OTZ"), "main-bot"), null);
+});
+
+test("intake group creates verified orders directly with the fixed note", async t => {
+  const { context, calls } = harness(t);
+  await context.handleLineEvent(intakeEvent());
+  assert.equal(calls.orders.length, 1);
+  assert.equal(calls.orders[0].status, "pending");
+  assert.equal(calls.orders[0].ride_details, "百回+30");
+  assert.equal(calls.orders[0].pickup, TEMPLE);
+  assert.equal(calls.orders[0].destination, "尚未提供");
+  assert.equal(calls.confirmations.length, 0);
+  await context.handleLineEvent(intakeEvent(`@OTZ 上車地點：${TEMPLE}\n下車地點：${ADDRESS}`));
+  assert.equal(calls.orders.length, 2);
+  assert.equal(calls.orders[1].destination, ADDRESS);
+});
+
+test("intake group ignores untagged messages and invalid addresses but permits ID lookup", async t => {
+  const { context, calls } = harness(t);
+  const untagged = intakeEvent();
+  delete untagged.message.mention;
+  await context.handleLineEvent(untagged);
+  await context.handleLineEvent(intakeEvent("@OTZ 謝謝"));
+  const dispatch = intakeEvent();
+  dispatch.destination = "a1";
+  await context.handleLineEvent(dispatch);
+  assert.equal(calls.orders.length, 0);
+  const lookup = intakeEvent("查群組ID");
+  await context.handleLineEvent(lookup);
+  assert.deepEqual(calls.replies, ["group-id"]);
+});
+
+test("dispatch template retains the fixed intake note", () => {
+  const start = source.indexOf("function formatRideRequestTemplate(");
+  const end = source.indexOf("\nfunction ", start + 1);
+  const context = vm.createContext({});
+  vm.runInContext(source.slice(start, end), context);
+  assert.equal(context.formatRideRequestTemplate({ pickup: TEMPLE, destination: ADDRESS, rideDetails: "百回+30" }),
+    `60/20/2\n上車地點:${TEMPLE}\n下車地點:${ADDRESS}\n百回+30`);
+});
 
 test("short pickup/dropoff labels preserve the two locations", () => {
   const pickup = "高雄市左營區尾西里實踐路18號";
@@ -46,6 +108,8 @@ function harness(t, options = {}) {
     console: { log() {}, warn() {}, error() {} },
     process: { env: { GOOGLE_MAPS_API_KEY: "test-key" } },
     parseRideRequest, parseRideFormSubmission, classifyRideSchedule, stripRouteFareQuestion,
+    isIntakeGroup, parseIntakeMention, getMainBotId: async () => "main-bot",
+    getLineSourceKey: () => "group:intake", replyLineSourceId: () => calls.replies.push("group-id"),
     validateRideLocations, getRoute, calculateFare, calculateDonggangTownFare, isDonggangTownTrip,
     isDispatchBotTagged: () => false,
     getPendingDispatchSearchPrompt: () => null,
@@ -73,7 +137,7 @@ function harness(t, options = {}) {
     pushDispatchLineMessages: async () => [],
     normalizeLineText: text => text
   });
-  for (const name of ["handleText", "createLineRideOrder", "handleMutedText", "getVerifiedRideInput",
+  for (const name of ["handleLineEvent", "handleText", "createLineRideOrder", "handleMutedText", "getVerifiedRideInput",
     "isFareQuoteKeyword", "isFareQuoteInlineRequest", "getValidatedCapturedRoute", "extractCapturedRoute", "dispatchTestOrder"]) {
     const start = source.search(new RegExp(`^(?:async )?function ${name}\\(`, "m"));
     assert.ok(start >= 0, name);

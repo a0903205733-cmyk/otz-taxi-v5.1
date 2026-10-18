@@ -9,6 +9,7 @@ import {
 } from "./parser.js";
 import { getRoute, getPickupEtaMinutes } from "./maps.js";
 import { validateRideLocations } from "./locations.js";
+import { isIntakeGroup, getMainBotId, parseIntakeMention } from "./group-intake.js";
 import { calculateDonggangTownFare, calculateFare, isDonggangTownTrip } from "./fare.js";
 import { quoteFlex, orderNo } from "./messages.js";
 import {
@@ -120,7 +121,7 @@ app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
   res.status(200).end();
 
   try {
-    await Promise.all((body.events || []).map(handleLineEvent));
+    await Promise.all((body.events || []).map(event => handleLineEvent({ ...event, destination: body.destination })));
   } catch (error) {
     console.error("Webhook error:", error);
   }
@@ -192,6 +193,12 @@ async function handleLineEvent(event) {
 
     if (incomingText === "查群組ID" || incomingText === "查ID") {
       return replyLineSourceId(event);
+    }
+
+    if (isIntakeGroup(event)) {
+      const parsed = parseIntakeMention(event, await getMainBotId());
+      if (!parsed) return;
+      return createLineRideOrder(event, parsed, false, await listSettings());
     }
 
     if (BOT_RESUME_KEYWORDS.has(incomingText)) {
