@@ -55,8 +55,68 @@ test("completion parser resolves both intake and regular order numbers", () => {
 function intakeEvent(text = `@OTZ ${TEMPLE}`) {
   return { type: "message", destination: "main-bot", replyToken: "test-reply",
     source: { type: "group", groupId: "C24304391da7434a2bc0ff5d1dd8c9413", userId: "sender" },
-    message: { type: "text", text, mention: { mentionees: [{ type: "user", userId: "main-bot", index: 0, length: 4 }] } } };
+    message: { id: "intake-message", type: "text", text, mention: { mentionees: [{ type: "user", userId: "main-bot", index: 0, length: 4 }] } } };
 }
+
+test("intake cancellation is a command, never a pickup address", async t => {
+  for (const text of ["@OTZ 取消", "@OTZ 取消 01-00304", "@OTZ 不要取消", "@OTZ 取消 01-00304 01-00305"]) {
+    const parsed = parseIntakeMention(intakeEvent(text), "main-bot");
+    assert.equal(parsed.intakeCommand, "cancel");
+    assert.equal(parsed.pickup, undefined);
+  }
+  assert.equal(parseIntakeMention(intakeEvent("@OTZ 取消 01-00304"), "main-bot").orderId, 304);
+  assert.equal(parseIntakeMention(intakeEvent("@OTZ 不要取消"), "main-bot").invalid, true);
+  const { context, calls } = harness(t);
+  let cancellations = 0;
+  context.cancelIntakeRide = async () => { cancellations += 1; };
+  await context.handleLineEvent(intakeEvent("@OTZ 取消"));
+  assert.equal(cancellations, 1);
+  assert.equal(calls.orders.length, 0);
+});
+
+test("quoted intake cancellation targets saved groups and refuses ambiguous or completed orders", async () => {
+  const replies = [], pushes = [];
+  let match = { orderId: 304, groupIds: ["original-dispatch"] }, cancelled = false, fail = false;
+  let lookupArgs;
+  const context = vm.createContext({
+    console: { error() {} },
+    findIntakeCancellation: async (...args) => { lookupArgs = args; return match; },
+    cancelPendingIntakeOrder: async () => {
+      if (cancelled) return null;
+      cancelled = true;
+      return { id: 304, pickup: "原上車點" };
+    },
+    clearDispatchSearchPromptForOrder() {}, createAuditLog: async () => {}, logLinePushError() {},
+    pushDispatchLineMessages: async (ids, text) => { if (fail) throw new Error("push failed"); pushes.push({ ids, text }); },
+    reply: async (_, text) => replies.push(text)
+  });
+  const start = source.indexOf("async function cancelIntakeRide(");
+  const end = source.indexOf("\nasync function handleDispatchBotTagged", start);
+  vm.runInContext(source.slice(start, end), context);
+  const event = intakeEvent("@OTZ 取消");
+  event.message.quotedMessageId = "original-message";
+  await context.cancelIntakeRide(event, { orderId: null });
+  assert.deepEqual(lookupArgs, [event.source.groupId, null, "original-message"]);
+  assert.equal(pushes[0].ids[0], "original-dispatch");
+  assert.match(pushes[0].text, /01-00304.*\n此單已取消/);
+  await context.cancelIntakeRide(event, { orderId: 304 });
+  assert.equal(pushes.length, 1);
+  assert.match(replies.at(-1), /已取消或已回報車訊/);
+  match = null;
+  await context.cancelIntakeRide(event, {});
+  assert.match(replies.at(-1), /找不到/);
+  match = { orderId: 304, groupIds: [] };
+  await context.cancelIntakeRide(event, {});
+  assert.match(replies.at(-1), /舊單/);
+  match.groupIds = ["original-dispatch"];
+  cancelled = false;
+  fail = true;
+  await context.cancelIntakeRide(event, {});
+  assert.match(replies.at(-1), /部分派單群組通知失敗/);
+  delete event.message.quotedMessageId;
+  await context.cancelIntakeRide(event, {});
+  assert.match(replies.at(-1), /請引用原叫車訊息/);
+});
 
 test("second completion accepts only standalone arrival and not the ETA label", async () => {
   const pushes = [], replies = [], statuses = [];
@@ -167,6 +227,8 @@ test("intake group copies addresses without Google and only acknowledges with �
   assert.equal(calls.orders[0].status, "pending");
   assert.equal(calls.intakeSource.id, 123);
   assert.equal(calls.intakeSource.source.groupId, intakeEvent().source.groupId);
+  assert.equal(calls.intakeSource.messageId, "intake-message");
+  assert.deepEqual(calls.intakeSource.dispatchGroupIds, ["test-group"]);
   assert.equal(calls.orders[0].ride_details, "百回+30");
   assert.equal(calls.orders[0].pickup, TEMPLE);
   assert.equal(calls.orders[0].destination, "尚未提供");
@@ -256,7 +318,7 @@ function harness(t, options = {}) {
     rememberFareQuoteIntent: () => { fareIntent = true; },
     clearFareQuoteIntent: () => { fareIntent = false; },
     listSettings: async () => ({}),
-    saveIntakeSource: async (id, source) => { calls.intakeSource = { id, source }; },
+    saveIntakeSource: async (id, source, messageId, dispatchGroupIds) => { calls.intakeSource = { id, source, messageId, dispatchGroupIds }; },
     upsertCustomerByLineId: async () => { calls.customerWrites += 1; return {}; },
     getRecentRideDispatch: () => null,
     rememberRecentRideDispatch() {},

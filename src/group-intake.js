@@ -43,6 +43,12 @@ export function parseIntakeMention(event, mainBotId) {
   if (ranges.length !== mentions.length) return null;
   for (const item of ranges) text = text.slice(0, item.index) + " " + text.slice(item.index + item.length);
   if (!text.trim()) return null;
+  if (text.includes("取消")) {
+    const orderIds = [...text.matchAll(/01-(\d{5,})(?!\d)/gu)].map(match => Number(match[1]));
+    const command = text.replace(/(?:訂單\s*[：:]?\s*)?01-\d+/gu, "").replace(/[\s：:，,。!！]/gu, "");
+    return { intakeCommand: "cancel", orderId: orderIds.length === 1 ? orderIds[0] : null,
+      invalid: command !== "取消" || orderIds.length > 1 };
+  }
   const parsed = parseRideRequest(text.trim());
   if (!parsed.pickup) return null;
   return { ...parsed, rideDetails: "百回+30" };

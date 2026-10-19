@@ -226,12 +226,42 @@ export async function createAuditLog(values) {
   if (error) console.error("Audit log error:", error);
 }
 
-export async function saveIntakeSource(orderId, source) {
+export async function saveIntakeSource(orderId, source, messageId, dispatchGroupIds = []) {
   const { error } = await db.from("audit_logs").insert({
     actor_type: "line", action: "order.intake_source", entity_type: "order",
-    entity_id: String(orderId), details: { source }
+    entity_id: String(orderId), details: { source, messageId, dispatchGroupIds }
   });
   if (error) throw error;
+}
+
+export async function findIntakeCancellation(groupId, orderId, quotedMessageId) {
+  let query = db.from("audit_logs").select("entity_id,details")
+    .eq("action", "order.intake_source").eq("entity_type", "order")
+    .contains("details", { source: { groupId } });
+  if (orderId) query = query.eq("entity_id", String(orderId));
+  if (quotedMessageId) query = query.contains("details", { messageId: quotedMessageId });
+  if (!orderId && !quotedMessageId) return null;
+  const { data, error } = await query.limit(2);
+  if (error) throw error;
+  if (data?.length !== 1) return null;
+  return { orderId: Number(data[0].entity_id), groupIds: data[0].details.dispatchGroupIds || [] };
+}
+
+export async function cancelPendingIntakeOrder(orderId) {
+  const { data, error } = await db.from("orders").update({
+    status: "cancelled", cancelled_at: new Date().toISOString()
+  }).eq("id", orderId).eq("status", "pending").is("completed_at", null).select("*").maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function completeDispatchOrder(orderId) {
+  const { data, error } = await db.from("orders").update({
+    status: "completed", completed_at: new Date().toISOString()
+  }).eq("id", orderId).neq("status", "cancelled").neq("status", "completed")
+    .is("cancelled_at", null).is("completed_at", null).select("*").maybeSingle();
+  if (error) throw error;
+  return data;
 }
 
 export async function getIntakeSource(orderId) {

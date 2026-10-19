@@ -21,7 +21,7 @@ import {
   listCustomers, updateCustomer, upsertCustomerByLineId,
   createPayment, createReceipt, getReceiptByOrderId,
   listAuditLogs, createAuditLog, saveIntakeSource, getIntakeSource,
-  claimDispatchArrival, finishDispatchArrival
+  claimDispatchArrival, finishDispatchArrival, findIntakeCancellation, cancelPendingIntakeOrder, completeDispatchOrder
 } from "./db.js";
 
 dotenv.config();
@@ -199,6 +199,7 @@ async function handleLineEvent(event) {
     if (isIntakeGroup(event)) {
       const parsed = parseIntakeMention(event, await getMainBotId());
       if (!parsed) return;
+      if (parsed.intakeCommand === "cancel") return cancelIntakeRide(event, parsed);
       return createLineRideOrder(event, parsed, false, await listSettings(), { intake: true });
     }
 
@@ -455,7 +456,7 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings, 
     clearFareQuoteIntent(event);
 
     if (!isFareQuoteRequest) {
-      if (directIntake) await saveIntakeSource(order.id, event.source);
+      if (directIntake) await saveIntakeSource(order.id, event.source, event.message?.id, getDispatchGroupIds());
       const dispatched = await pushOrderToDispatchGroup(order).catch(error => {
         logLinePushError("Direct order dispatch group push failed", error);
         return false;
@@ -858,6 +859,35 @@ async function handlePostback(event) {
   }
 }
 
+async function cancelIntakeRide(event, command) {
+  if (command.invalid || (!command.orderId && !event.message?.quotedMessageId)) {
+    return reply(event.replyToken, "請引用原叫車訊息並標記 OTZ 輸入取消，或提供單號：取消 01-XXXXX。");
+  }
+  try {
+    const match = await findIntakeCancellation(event.source.groupId, command.orderId, event.message.quotedMessageId);
+    if (!match) return reply(event.replyToken, "找不到此群組對應的訂單，請提供正確單號；不會建立新單。");
+    if (!match.groupIds.length) return reply(event.replyToken, "此舊單未保存派單群組，請人工確認取消，避免通知錯群。");
+    const order = await cancelPendingIntakeOrder(match.orderId);
+    if (!order) return reply(event.replyToken, "此單已取消或已回報車訊，請確認訂單狀態；已接單行程請人工聯絡取消。");
+    clearDispatchSearchPromptForOrder(order.id);
+    const number = `01-${String(order.id).padStart(5, "0")}`;
+    try {
+      await pushDispatchLineMessages(match.groupIds, `訂單：${number}\n此單已取消，請勿前往。\n上車地點：${order.pickup}`);
+    } catch (error) {
+      logLinePushError("Intake cancellation dispatch notification failed", error);
+      await createAuditLog({ actor_type: "line", action: "order.intake_cancel_notify_failed", entity_type: "order",
+        entity_id: String(order.id), details: { source: event.source, groupIds: match.groupIds } });
+      return reply(event.replyToken, `訂單 ${number} 已取消，但部分派單群組通知失敗，請人工確認。`);
+    }
+    await createAuditLog({ actor_type: "line", action: "order.intake_cancel", entity_type: "order",
+      entity_id: String(order.id), details: { source: event.source, groupIds: match.groupIds } });
+    return reply(event.replyToken, `訂單 ${number} 已取消，已通知派單群組。`);
+  } catch (error) {
+    console.error("Intake cancellation failed:", error);
+    return reply(event.replyToken, "取消處理失敗，請聯絡後台確認；不會建立新單。");
+  }
+}
+
 async function handleDispatchBotTagged(event, incomingText) {
   if (isOnlyDispatchBotMention(incomingText)) {
     const nickname = await getLineNickname(event);
@@ -875,6 +905,9 @@ async function handleDispatchBotTagged(event, incomingText) {
   }
   try {
     const order = await getOrder(completion.orderId);
+    if (order.status === "cancelled" || order.cancelled_at) {
+      return reply(event.replyToken, "此訂單已取消，不接受車訊或抵達回報。");
+    }
     const displayOrderNo = formatIntakeDispatch(order) ? `01-${String(order.id).padStart(5, "0")}` : orderNo(order.id);
     if (order.status === "completed" || order.completed_at) {
       if (isDispatchArrivalText(incomingText)) {
@@ -887,10 +920,8 @@ async function handleDispatchBotTagged(event, incomingText) {
     }
 
     clearDispatchSearchPromptForOrder(order.id);
-    const updated = await updateOrder(order.id, {
-      status: "completed",
-      completed_at: new Date().toISOString()
-    });
+    const updated = await completeDispatchOrder(order.id);
+    if (!updated) return reply(event.replyToken, "此訂單狀態已變更，請確認是否已取消或已由其他人回報。");
     await createAuditLog({
       actor_type: "line",
       action: "order.dispatch_tag_complete",
