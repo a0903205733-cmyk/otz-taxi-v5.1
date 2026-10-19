@@ -1,6 +1,8 @@
 import { parseRideRequest } from "./parser.js";
 
-const DEFAULT_GROUP = "C24304391da7434a2bc0ff5d1dd8c9413";
+const DEFAULT_GROUPS = [
+  "C0b0d5b3bce8b7d9cfe8eb2e133afeafa"
+];
 
 export function formatIntakeDispatch(order) {
   if (order.ride_details !== "百回+30") return null;
@@ -15,7 +17,7 @@ export function formatIntakeDispatch(order) {
 let botCache = { token: "", id: "", expiresAt: 0 };
 
 export function isIntakeGroup(event) {
-  const groups = String(process.env.LINE_INTAKE_GROUP_IDS || DEFAULT_GROUP).split(/[,\r\n]+/u).map(value => value.trim());
+  const groups = String(process.env.LINE_INTAKE_GROUP_IDS || DEFAULT_GROUPS.join(",")).split(/[,\r\n]+/u).map(value => value.trim());
   return event.source?.type === "group" && groups.includes(event.source.groupId);
 }
 

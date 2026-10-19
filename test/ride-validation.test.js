@@ -119,9 +119,35 @@ test("completion parser resolves both intake and regular order numbers", () => {
 
 function intakeEvent(text = `@OTZ ${TEMPLE}`) {
   return { type: "message", destination: "main-bot", replyToken: "test-reply",
-    source: { type: "group", groupId: "C24304391da7434a2bc0ff5d1dd8c9413", userId: "sender" },
+    source: { type: "group", groupId: "C0b0d5b3bce8b7d9cfe8eb2e133afeafa", userId: "sender" },
     message: { id: "intake-message", type: "text", text, mention: { mentionees: [{ type: "user", userId: "main-bot", index: 0, length: 4 }] } } };
 }
+
+test("only the replacement intake group is enabled by default", async t => {
+  const original = process.env.LINE_INTAKE_GROUP_IDS;
+  process.env.LINE_INTAKE_GROUP_IDS = "";
+  t.after(() => {
+    if (original === undefined) delete process.env.LINE_INTAKE_GROUP_IDS;
+    else process.env.LINE_INTAKE_GROUP_IDS = original;
+  });
+  const { context, calls } = harness(t);
+  for (const groupId of ["C0b0d5b3bce8b7d9cfe8eb2e133afeafa"]) {
+    const event = intakeEvent();
+    event.source.groupId = groupId;
+    assert.equal(isIntakeGroup(event), true);
+    await context.handleLineEvent(event);
+    assert.equal(calls.intakeSource.source.groupId, groupId);
+    assert.deepEqual(calls.intakeSource.dispatchGroupIds, ["test-group"]);
+  }
+  assert.equal(calls.orders.length, 1);
+  assert.deepEqual(calls.replies, ["好"]);
+  const previous = intakeEvent();
+  previous.source.groupId = "C24304391da7434a2bc0ff5d1dd8c9413";
+  assert.equal(isIntakeGroup(previous), false);
+  assert.equal(parseIntakeMention(previous, "main-bot"), null);
+  assert.equal(calls.google.length, 0);
+  assert.equal(isIntakeGroup({ source: { type: "group", groupId: "unrelated" } }), false);
+});
 
 test("intake cancellation is a command, never a pickup address", async t => {
   for (const text of ["@OTZ 取消", "@OTZ 取消 01-00304", "@OTZ 不要取消", "@OTZ 取消 01-00304 01-00305"]) {

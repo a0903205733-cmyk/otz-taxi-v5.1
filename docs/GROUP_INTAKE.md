@@ -1,6 +1,6 @@
 # 特定接單群組
 
-預設接單來源群組為 `C24304391da7434a2bc0ff5d1dd8c9413`。可用 `LINE_INTAKE_GROUP_IDS` 覆寫，多個 ID 以逗號或換行分隔。這是來源群組，不會自動加入派單目的群組。
+預設接單來源群組僅為 `C0b0d5b3bce8b7d9cfe8eb2e133afeafa`，不再包含原群組 `C24304391da7434a2bc0ff5d1dd8c9413`。可用 `LINE_INTAKE_GROUP_IDS` 覆寫；部署時若已設定此變數，也必須改成新的單一 ID。這是來源群組，不會自動加入派單目的群組。原群組舊單因來源不再在允許清單，需人工處理後續群組通知。
 
 只有訊息的 LINE mention metadata 真正標記 OTZ 主帳號，且 webhook 的 destination 是主帳號時，才會擷取同一則文字中的地址。單純打出 `@OTZ`、標記派單機器人、只標記但沒有地址，都不會建單。主帳號身分以 `LINE_CHANNEL_ACCESS_TOKEN` 查詢 bot info，快取一小時。
 
