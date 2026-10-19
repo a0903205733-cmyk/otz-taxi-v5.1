@@ -247,10 +247,8 @@ export async function findIntakeCancellation(groupId, orderId, quotedMessageId) 
   return { orderId: Number(data[0].entity_id), groupIds: data[0].details.dispatchGroupIds || [] };
 }
 
-export async function cancelPendingIntakeOrder(orderId) {
-  const { data, error } = await db.from("orders").update({
-    status: "cancelled", cancelled_at: new Date().toISOString()
-  }).eq("id", orderId).eq("status", "pending").is("completed_at", null).select("*").maybeSingle();
+export async function cancelIntakeBeforeArrival(orderId) {
+  const { data, error } = await db.rpc("cancel_intake_before_arrival", { p_order_id: orderId });
   if (error) throw error;
   return data;
 }
@@ -273,18 +271,9 @@ export async function getIntakeSource(orderId) {
 }
 
 export async function claimDispatchArrival(orderId, source) {
-  const { data: first, error: lookupError } = await db.from("audit_logs").select("id")
-    .eq("action", "order.dispatch_tag_complete").eq("entity_type", "order")
-    .eq("entity_id", String(orderId)).limit(1);
-  if (lookupError) throw lookupError;
-  if (!first?.length) throw new Error("FIRST_DISPATCH_COMPLETION_REQUIRED");
-  const { data, error } = await db.from("audit_logs").insert({
-    actor_type: "line", action: "order.dispatch_arrival", entity_type: "order",
-    entity_id: String(orderId), details: { source, notification_status: "pending" }
-  }).select("id").single();
-  if (error?.code === "23505") return null;
+  const { data, error } = await db.rpc("claim_dispatch_arrival", { p_order_id: orderId, p_source: source });
   if (error) throw error;
-  return data.id;
+  return data;
 }
 
 export async function finishDispatchArrival(id, source, status) {

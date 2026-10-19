@@ -21,7 +21,7 @@ import {
   listCustomers, updateCustomer, upsertCustomerByLineId,
   createPayment, createReceipt, getReceiptByOrderId,
   listAuditLogs, createAuditLog, saveIntakeSource, getIntakeSource,
-  claimDispatchArrival, finishDispatchArrival, findIntakeCancellation, cancelPendingIntakeOrder, completeDispatchOrder
+  claimDispatchArrival, finishDispatchArrival, findIntakeCancellation, cancelIntakeBeforeArrival, completeDispatchOrder
 } from "./db.js";
 
 dotenv.config();
@@ -867,12 +867,18 @@ async function cancelIntakeRide(event, command) {
     const match = await findIntakeCancellation(event.source.groupId, command.orderId, event.message.quotedMessageId);
     if (!match) return reply(event.replyToken, "找不到此群組對應的訂單，請提供正確單號；不會建立新單。");
     if (!match.groupIds.length) return reply(event.replyToken, "此舊單未保存派單群組，請人工確認取消，避免通知錯群。");
-    const order = await cancelPendingIntakeOrder(match.orderId);
-    if (!order) return reply(event.replyToken, "此單已取消或已回報車訊，請確認訂單狀態；已接單行程請人工聯絡取消。");
+    const cancelled = await cancelIntakeBeforeArrival(match.orderId);
+    if (!cancelled) return reply(event.replyToken, "此單已取消、已抵達或狀態不允許取消；已抵達行程請人工聯絡處理。");
+    const { order, driverSource } = cancelled;
     clearDispatchSearchPromptForOrder(order.id);
     const number = `01-${String(order.id).padStart(5, "0")}`;
     try {
-      await pushDispatchLineMessages(match.groupIds, `訂單：${number}\n此單已取消，請勿前往。\n上車地點：${order.pickup}`);
+      const groupIds = [...new Set([...match.groupIds,
+        ...(driverSource?.type === "group" && driverSource.groupId ? [driverSource.groupId] : [])])];
+      await pushDispatchLineMessages(groupIds, `訂單：${number}\n此單已取消，請勿前往。\n上車地點：${order.pickup}`, {
+        mentionUserId: driverSource?.userId,
+        mentionGroupId: driverSource?.groupId
+      });
     } catch (error) {
       logLinePushError("Intake cancellation dispatch notification failed", error);
       await createAuditLog({ actor_type: "line", action: "order.intake_cancel_notify_failed", entity_type: "order",
@@ -2239,7 +2245,8 @@ async function pushDispatchLineMessages(groupIds, text, options = {}) {
 
   for (const groupId of ids) {
     try {
-      const result = await pushDispatchLineMessage(groupId, dispatchText, options);
+      const mentionUserId = options.mentionGroupId === groupId ? options.mentionUserId : null;
+      const result = await pushDispatchLineMessage(groupId, mentionUserId ? text : dispatchText, { ...options, mentionUserId });
       results.push({ groupId, account: result.name });
     } catch (error) {
       const details = getLinePushErrorDetails(error);
@@ -2277,13 +2284,15 @@ async function pushDispatchLineMessage(groupId, text, options = {}) {
     try {
       await account.client.pushMessage({
         to: groupId,
-        messages: [createDispatchTextMessage(text)]
+        messages: [options.mentionUserId
+          ? createUserMentionMessage(options.mentionUserId, "接單司機", text)
+          : createDispatchTextMessage(text)]
       });
       if (forcedIndex === null) dispatchTokenCursor = (index + 1) % accounts.length;
       return { name: account.name, index };
     } catch (error) {
       const details = getLinePushErrorDetails(error);
-      if (details.status === 400) {
+      if (details.status === 400 && !options.mentionUserId) {
         try {
           await account.client.pushMessage({
             to: groupId,

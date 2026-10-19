@@ -74,17 +74,17 @@ test("intake cancellation is a command, never a pickup address", async t => {
   assert.equal(calls.orders.length, 0);
 });
 
-test("quoted intake cancellation targets saved groups and refuses ambiguous or completed orders", async () => {
+test("quoted intake cancellation targets saved groups and refuses ambiguous or arrived orders", async () => {
   const replies = [], pushes = [];
   let match = { orderId: 304, groupIds: ["original-dispatch"] }, cancelled = false, fail = false;
   let lookupArgs;
   const context = vm.createContext({
     console: { error() {} },
     findIntakeCancellation: async (...args) => { lookupArgs = args; return match; },
-    cancelPendingIntakeOrder: async () => {
+    cancelIntakeBeforeArrival: async () => {
       if (cancelled) return null;
       cancelled = true;
-      return { id: 304, pickup: "原上車點" };
+      return { order: { id: 304, pickup: "原上車點" } };
     },
     clearDispatchSearchPromptForOrder() {}, createAuditLog: async () => {}, logLinePushError() {},
     pushDispatchLineMessages: async (ids, text) => { if (fail) throw new Error("push failed"); pushes.push({ ids, text }); },
@@ -101,7 +101,7 @@ test("quoted intake cancellation targets saved groups and refuses ambiguous or c
   assert.match(pushes[0].text, /01-00304.*\n此單已取消/);
   await context.cancelIntakeRide(event, { orderId: 304 });
   assert.equal(pushes.length, 1);
-  assert.match(replies.at(-1), /已取消或已回報車訊/);
+  assert.match(replies.at(-1), /已取消、已抵達/);
   match = null;
   await context.cancelIntakeRide(event, {});
   assert.match(replies.at(-1), /找不到/);
@@ -166,6 +166,67 @@ test("second completion accepts only standalone arrival and not the ETA label", 
   await context.handleDispatchBotTagged(event, message);
   assert.match(replies.at(-1), /資料不完整/);
   assert.equal(pushes.length, 2);
+  order = { ...order, status: "cancelled", cancelled_at: "2026-10-19" };
+  for (const body of [message, "訂單：01-00123\n9820/白/15\n@A1"]) {
+    await context.handleDispatchBotTagged(event, body);
+    assert.match(replies.at(-1), /已取消，不接受/);
+  }
+  assert.equal(pushes.length, 2);
+});
+
+test("cancel after driver report closes immediately and tags the original driver in their group", async () => {
+  const pushes = [], replies = [];
+  const context = vm.createContext({
+    console: { error() {} },
+    findIntakeCancellation: async () => ({ orderId: 304, groupIds: ["dispatch-one", "driver-group"] }),
+    cancelIntakeBeforeArrival: async () => ({
+      order: { id: 304, status: "cancelled", pickup: "原上車點" },
+      driverSource: { type: "group", groupId: "driver-group", userId: "original-driver" }
+    }),
+    clearDispatchSearchPromptForOrder() {}, createAuditLog: async () => {}, logLinePushError() {},
+    pushDispatchLineMessage: async (group, text, options) => {
+      pushes.push({ group, text, options }); return { name: "A1" };
+    },
+    withDispatchMentionAll: text => `@All\n${text}`,
+    reply: async (_, text) => replies.push(text)
+  });
+  for (const name of ["cancelIntakeRide", "pushDispatchLineMessages"]) {
+    const start = source.indexOf(`async function ${name}(`);
+    const next = source.slice(start + 1).search(/^(?:async )?function /m);
+    vm.runInContext(source.slice(start, start + 1 + next), context);
+  }
+  await context.cancelIntakeRide(intakeEvent("@OTZ 取消 01-00304"), { orderId: 304 });
+  assert.equal(pushes.length, 2);
+  assert.equal(pushes[0].options.mentionUserId, null);
+  assert.equal(pushes[1].options.mentionUserId, "original-driver");
+  assert.equal(pushes[1].group, "driver-group");
+  assert.match(pushes[1].text, /此單已取消，請勿前往/);
+  assert.match(replies[0], /已取消，已通知派單群組/);
+});
+
+test("driver cancellation uses textV2 user mention and does not silently fall back to plain text", async () => {
+  const messages = [];
+  let fail = false;
+  const context = vm.createContext({
+    dispatchTokenCursor: 0, console: { error() {}, warn() {} },
+    normalizeLineText: text => text,
+    getDispatchLineAccounts: () => [{ name: "A1", client: { pushMessage: async value => {
+      messages.push(value); if (fail) throw new Error("bad request");
+    } } }],
+    getLinePushErrorDetails: () => ({ status: 400 })
+  });
+  for (const name of ["createUserMentionMessage", "pushDispatchLineMessage"]) {
+    const start = source.search(new RegExp(`^(?:async )?function ${name}\\(`, "m"));
+    const next = source.slice(start + 1).search(/^(?:async )?function /m);
+    vm.runInContext(source.slice(start, start + 1 + next), context);
+  }
+  await context.pushDispatchLineMessage("driver-group", "此單已取消", { mentionUserId: "original-driver" });
+  const message = messages[0].messages[0];
+  assert.equal(message.type, "textV2");
+  assert.equal(message.substitution.user.mentionee.userId, "original-driver");
+  fail = true;
+  await assert.rejects(context.pushDispatchLineMessage("driver-group", "取消", { mentionUserId: "original-driver" }));
+  assert.equal(messages.length, 2);
 });
 
 test("intake completion sends sorted driver data to the original group through main LINE client", async () => {
