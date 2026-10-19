@@ -20,7 +20,8 @@ import {
   subscribeToFleetChanges, listSettings, updateSetting,
   listCustomers, updateCustomer, upsertCustomerByLineId,
   createPayment, createReceipt, getReceiptByOrderId,
-  listAuditLogs, createAuditLog, saveIntakeSource, getIntakeSource
+  listAuditLogs, createAuditLog, saveIntakeSource, getIntakeSource,
+  claimDispatchArrival, finishDispatchArrival
 } from "./db.js";
 
 dotenv.config();
@@ -872,15 +873,17 @@ async function handleDispatchBotTagged(event, incomingText) {
   if (!completion.orderId) {
     return reply(event.replyToken, "請在標記訊息中包含訂單編號，例如 OTZ-000123。");
   }
-  if (!completion.fourDigits || !completion.color || !completion.twoDigits) {
-    return reply(event.replyToken, "資料不完整，請提供四位數字、顏色、一至兩位數字或準時。");
-  }
-
   try {
     const order = await getOrder(completion.orderId);
     const displayOrderNo = formatIntakeDispatch(order) ? `01-${String(order.id).padStart(5, "0")}` : orderNo(order.id);
     if (order.status === "completed" || order.completed_at) {
+      if (isDispatchArrivalText(incomingText)) {
+        return await handleDispatchArrival(event, order, displayOrderNo);
+      }
       return reply(event.replyToken, `此訂單已記錄完成 ${displayOrderNo}，不接受第二位回覆。`);
+    }
+    if (!completion.fourDigits || !completion.color || !completion.twoDigits) {
+      return reply(event.replyToken, "資料不完整，請提供四位數字、顏色、一至兩位數字或準時。");
     }
 
     clearDispatchSearchPromptForOrder(order.id);
@@ -921,6 +924,38 @@ async function handleDispatchBotTagged(event, incomingText) {
     console.error("Dispatch bot tag completion failed:", error);
     return reply(event.replyToken, "紀錄完成失敗，請確認訂單編號是否正確。");
   }
+}
+
+function isDispatchArrivalText(text) {
+  return String(text || "")
+    .replace(/@(?:派單機器人(?:\s*[AＡ]?\s*[1-4])?|OTZ|[AＡ]\s*[1-4])/giu, "")
+    .split(/[\r\n]+/u).some(line => /^\s*抵達[。.!！]?\s*$/u.test(line));
+}
+
+async function handleDispatchArrival(event, order, displayOrderNo) {
+  let target = order.customer_line_id;
+  if (formatIntakeDispatch(order)) {
+    const source = await getIntakeSource(order.id);
+    if (!source || !isIntakeGroup({ source })) throw new Error("Intake source group missing");
+    target = source.groupId;
+  }
+  if (!target) throw new Error("Arrival notification recipient missing");
+  const claimId = await claimDispatchArrival(order.id, event.source);
+  if (!claimId) {
+    return reply(event.replyToken, `訂單 ${displayOrderNo} 已有抵達回報紀錄，不重複發送；通知結果請查看後台紀錄。`);
+  }
+  try {
+    await line.pushMessage({ to: target, messages: [{ type: "text",
+      text: `訂單：${displayOrderNo}\n司機已抵達。` }] });
+    await finishDispatchArrival(claimId, event.source, "sent");
+  } catch (error) {
+    await finishDispatchArrival(claimId, event.source, "failed_or_unknown");
+    logLinePushError("Arrival notification failed", error);
+    return reply(event.replyToken, `訂單 ${displayOrderNo} 抵達通知未確認送達，請後台確認。`);
+  }
+  const nickname = await getLineNickname(event);
+  return replyMentionUser(event.replyToken, event.source?.userId || "", nickname || "回覆者",
+    `抵達已紀錄完成 ${displayOrderNo}`);
 }
 
 function isDispatchBotTagged(event, text) {

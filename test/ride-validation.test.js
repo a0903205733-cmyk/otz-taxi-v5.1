@@ -41,6 +41,56 @@ function intakeEvent(text = `@OTZ ${TEMPLE}`) {
     message: { type: "text", text, mention: { mentionees: [{ type: "user", userId: "main-bot", index: 0, length: 4 }] } } };
 }
 
+test("second completion accepts only standalone arrival and not the ETA label", async () => {
+  const pushes = [], replies = [], statuses = [];
+  let claimed = false, failure = false;
+  let order = { id: 123, status: "completed", customer_line_id: "customer" };
+  const context = vm.createContext({
+    console: { error() {} }, formatIntakeDispatch, isIntakeGroup,
+    isOnlyDispatchBotMention: () => false,
+    getOrder: async () => order,
+    orderNo: () => "OTZ-000123",
+    getIntakeSource: async () => intakeEvent().source,
+    claimDispatchArrival: async () => { if (claimed) return null; claimed = true; return 7; },
+    finishDispatchArrival: async (_, __, status) => statuses.push(status),
+    line: { pushMessage: async value => { if (failure) throw new Error("429"); pushes.push(value); } },
+    reply: async (_, text) => replies.push(text),
+    replyMentionUser: async (_, user, __, text) => replies.push({ user, text }),
+    getLineNickname: async () => "driver", logLinePushError() {}
+  });
+  for (const name of ["handleDispatchBotTagged", "handleDispatchArrival", "isDispatchArrivalText", "parseDispatchCompletionText", "parseDispatchCompletionSegment"]) {
+    const start = source.search(new RegExp(`^(?:async )?function ${name}\\(`, "m"));
+    const next = source.slice(start + 1).search(/^(?:async )?function /m);
+    vm.runInContext(source.slice(start, start + 1 + next), context);
+  }
+  for (const text of ["抵達時間：15", "尚未抵達", "快抵達", "車牌/顏色/抵達時間：9820/白/15"]) {
+    assert.equal(context.isDispatchArrivalText(text), false);
+  }
+  const event = { replyToken: "reply", source: { userId: "driver-id" } };
+  const message = "訂單：OTZ-000123\n抵達 @派單機器人2";
+  await context.handleDispatchBotTagged(event, message);
+  assert.equal(pushes[0].to, "customer");
+  assert.equal(pushes[0].messages[0].text, "訂單：OTZ-000123\n司機已抵達。");
+  assert.equal(replies[0].user, "driver-id");
+  await context.handleDispatchBotTagged(event, message);
+  assert.equal(pushes.length, 1);
+  assert.match(replies.at(-1), /不重複發送/);
+  claimed = false;
+  order = { ...order, ride_details: "百回+30" };
+  await context.handleDispatchBotTagged(event, "訂單：01-00123\n抵達\n@A1");
+  assert.equal(pushes[1].to, intakeEvent().source.groupId);
+  assert.match(pushes[1].messages[0].text, /01-00123/);
+  claimed = false;
+  failure = true;
+  await context.handleDispatchBotTagged(event, message);
+  assert.equal(statuses.at(-1), "failed_or_unknown");
+  assert.match(replies.at(-1), /未確認送達/);
+  order = { ...order, status: "pending" };
+  await context.handleDispatchBotTagged(event, message);
+  assert.match(replies.at(-1), /資料不完整/);
+  assert.equal(pushes.length, 2);
+});
+
 test("intake completion sends sorted driver data to the original group through main LINE client", async () => {
   const pushes = [];
   let savedSource = intakeEvent().source;
