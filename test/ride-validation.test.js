@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
-import { parseRideRequest, parseRideFormSubmission, classifyRideSchedule, stripRouteFareQuestion } from "../src/parser.js";
+import { parseRideRequest, parseRideFormSubmission, classifyRideSchedule, stripRouteFareQuestion, stripAddressPostalCode } from "../src/parser.js";
 import { validateRideLocations } from "../src/locations.js";
 import { isIntakeGroup, parseIntakeMention, formatIntakeDispatch } from "../src/group-intake.js";
 import { getRoute } from "../src/maps.js";
@@ -10,6 +10,23 @@ import { calculateFare, calculateDonggangTownFare, isDonggangTownTrip } from "..
 import { ADDRESS, TEMPLE, geocodeResult, placeResult, mapsFetch, transportPlaces } from "./fixtures/locations.js";
 
 const source = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
+
+test("postal cleanup preserves house numbers and cleans the reported malformed input", () => {
+  const pickup = "屏東縣崁頂鄉園寮村南州路1-2號";
+  const destination = "屏東縣屏東市建民路104-3號";
+  for (const value of [pickup + "924號", "924" + pickup, "924001 " + pickup, pickup + " 郵遞區號：924"]) {
+    assert.equal(stripAddressPostalCode(value), pickup);
+  }
+  for (const value of [destination, "屏東縣崁頂鄉南州路924號", "屏東縣屏東市建民路104-3號2樓", pickup + "925號"]) {
+    assert.equal(stripAddressPostalCode(value), value);
+  }
+  const parsed = parseRideRequest(`${pickup}924號\n${destination}`);
+  assert.equal(parsed.pickup, pickup);
+  assert.equal(parsed.destination, destination);
+  const intake = parseIntakeMention(intakeEvent(`@OTZ 上車地點：${pickup}924號\n下車地點：${destination}`), "main-bot");
+  assert.equal(intake.pickup, pickup);
+  assert.equal(intake.destination, destination);
+});
 
 test("intake dispatch uses 01 numbers and omits missing destinations", () => {
   const order = { id: 123, pickup: TEMPLE, destination: "尚未提供", ride_details: "百回+30" };

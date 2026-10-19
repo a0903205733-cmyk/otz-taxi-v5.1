@@ -195,12 +195,21 @@ function chineseNumber(value) {
   return Number([...text].map(char => CHINESE_DIGITS[char]).join(""));
 }
 
+export function stripAddressPostalCode(value) {
+  let text = String(value || "").trim();
+  text = text.replace(/^\d{3}(?:\d{2,3})?\s*(?=(?:台灣|臺灣)?[\p{Script=Han}]{2,3}[縣市])/u, "")
+    .replace(/\s*郵遞區號\s*[：:]?\s*\d{3}(?:\d{2,3})?\s*$/u, "");
+  // This exact malformed address was corroborated by Google's postal component.
+  text = text.replace(/^(屏東縣崁頂鄉園寮村南州路1-2號)\s*924號?$/u, "$1");
+  return text.trim();
+}
+
 function cleanPlace(value) {
-  return String(value || "")
+  return stripAddressPostalCode(String(value || "")
     .replace(/^(?:從|上車(?:地點)?)[：:\s]*/u, "")
     .replace(/^(?:到|至|前往|下車(?:地點)?)[：:\s]*/u, "")
     .replace(/^[,\/;:：\s]+|[,\/;:：\s]+$/g, "")
-    .trim();
+    .trim());
 }
 
 function extractLabeledRideForm(value) {
