@@ -43,7 +43,6 @@ const pendingRideFormReplies = new Map();
 const pendingDispatchSearchPrompts = new Map();
 const recentRideDispatches = new Map();
 const dispatchSearchTimers = new Map();
-const dispatchBotInfoCache = { key: "", expiresAt: 0, ids: new Set() };
 const recentLineWebhookEvents = [];
 const DEFAULT_ADMIN_TOKEN = "0908160150";
 const LINE_MUTED_SOURCES_SETTING = "muted_line_sources";
@@ -160,9 +159,7 @@ function summarizeLineEventMessage(event) {
 
 function getLineChannelSecrets() {
   return [
-    process.env.LINE_CHANNEL_SECRET,
-    ...String(process.env.LINE_CHANNEL_SECRETS || "")
-      .split(/[\n,]+/)
+    process.env.LINE_CHANNEL_SECRET
   ]
     .map(secret => String(secret || "").trim())
     .filter(Boolean);
@@ -187,6 +184,8 @@ function isValidLineSignature(req) {
 }
 
 async function handleLineEvent(event) {
+  // Old A1-A4 webhooks must not create duplicate orders or consume reply tokens.
+  if (event.destination && event.destination !== await getMainBotId()) return;
   const sourceKey = getLineSourceKey(event);
 
   if (event.type === "message" && event.message.type === "text") {
@@ -197,6 +196,10 @@ async function handleLineEvent(event) {
     }
 
     if (isIntakeGroup(event)) {
+      if (isDispatchBotTagged(event, incomingText) && !incomingText.includes("取消") &&
+          (/(?:01-\d+|OTZ-\d+)/iu.test(incomingText) || isOnlyDispatchBotMention(normalizeMainBotMention(event, incomingText)))) {
+        return handleDispatchBotTagged(event, incomingText);
+      }
       const parsed = parseIntakeMention(event, await getMainBotId());
       if (!parsed) return;
       if (parsed.intakeCommand === "cancel") return cancelIntakeRide(event, parsed);
@@ -215,11 +218,6 @@ async function handleLineEvent(event) {
 
     if (isDispatchBotTagged(event, incomingText)) {
       return handleDispatchBotTagged(event, incomingText);
-    }
-
-    if (await isDispatchBotWebhookEvent(event)) {
-      console.log("Dispatch bot webhook skipped normal text handling.");
-      return;
     }
 
     if (isRideDetectionDisabledSource(event)) {
@@ -895,6 +893,7 @@ async function cancelIntakeRide(event, command) {
 }
 
 async function handleDispatchBotTagged(event, incomingText) {
+  incomingText = normalizeMainBotMention(event, incomingText);
   if (isOnlyDispatchBotMention(incomingText)) {
     const nickname = await getLineNickname(event);
     return replyMentionUser(
@@ -999,9 +998,21 @@ function isDispatchBotTagged(event, text) {
   const sourceType = event?.source?.type;
   if (!["group", "room"].includes(sourceType)) return false;
   const mentionees = event?.message?.mention?.mentionees || [];
-  const dispatchMentionPattern = /@(?:派單機器人(?:\s*[AＡ]?\s*[1-4])?|OTZ|[AＡ]\s*[1-4])/iu;
-  if (mentionees.length && dispatchMentionPattern.test(text)) return true;
-  return dispatchMentionPattern.test(text);
+  const selfMention = mentionees.some(item => item.type === "user" &&
+    (item.isSelf === true || (event.destination && item.userId === event.destination)));
+  if (!selfMention) return false;
+  return isIntakeGroup(event) || getDispatchGroupIds().includes(event.source?.groupId) ||
+    /(?:01-\d+|OTZ-\d+)/iu.test(text);
+}
+
+function normalizeMainBotMention(event, text) {
+  let result = String(text || "");
+  const ranges = (event.message?.mention?.mentionees || []).filter(item => item.type === "user" &&
+    (item.isSelf === true || (event.destination && item.userId === event.destination)) &&
+    Number.isInteger(item.index) && Number.isInteger(item.length) && item.index >= 0 && item.length > 0 &&
+    item.index + item.length <= result.length).sort((a, b) => b.index - a.index);
+  for (const item of ranges) result = result.slice(0, item.index) + "@OTZ" + result.slice(item.index + item.length);
+  return result;
 }
 
 function isOnlyDispatchBotMention(text) {
@@ -1520,12 +1531,8 @@ app.post("/api/admin/line/dispatch-test", adminAuth, async (req, res) => {
     ? [String(req.body.groupId).trim()]
     : getDispatchGroupIds();
   const text = normalizeLineText(req.body.text || "OTZ 派單群組測試\n60/20/2\n上車地點:測試\n下車地點:測試");
-  const accountIndex = Number.isInteger(Number(req.body.accountIndex))
-    ? Number(req.body.accountIndex) - 1
-    : null;
-
   try {
-    const results = await pushDispatchLineMessages(groupIds, text, { accountIndex });
+    const results = await pushDispatchLineMessages(groupIds, text);
     res.json({ ok: true, groupIds, results });
   } catch (error) {
     const details = getLinePushErrorDetails(error);
@@ -2233,7 +2240,7 @@ async function dispatchTestOrder(event, incomingText = "") {
     return reply(event.replyToken, `測試單已派出\n訂單：${orderNo(order.id)}`);
   } catch (error) {
     logLinePushError("Test order dispatch failed", error);
-    return reply(event.replyToken, "測試單派出失敗，請確認 A1~A4 與派單群組設定");
+    return reply(event.replyToken, "測試單派出失敗，請確認 OTZ 主帳號已加入派單群組及訊息額度");
   }
 }
 
@@ -2346,97 +2353,12 @@ function createDispatchPlainTextMessage(text) {
 }
 
 function getDispatchLineAccounts() {
-  const tokens = getConfiguredDispatchTokens();
-
-  if (!tokens.length && process.env.LINE_CHANNEL_ACCESS_TOKEN) {
-    tokens.push(process.env.LINE_CHANNEL_ACCESS_TOKEN);
-  }
-
-  return tokens.map((token, index) => ({
-    name: `dispatch-${index + 1}`,
-    token,
-    client: new messagingApi.MessagingApiClient({ channelAccessToken: token })
-  }));
-}
-
-function getConfiguredDispatchTokens() {
-  return String(process.env.LINE_DISPATCH_TOKENS || "")
-    .split(/[,\n\r]+/u)
-    .map(token => token.trim())
-    .filter(Boolean);
-}
-
-function getConfiguredDispatchBotIds() {
-  return String(process.env.LINE_DISPATCH_BOT_IDS || "")
-    .split(/[,\n\r]+/u)
-    .map(id => id.trim())
-    .filter(Boolean);
-}
-
-async function isDispatchBotWebhookEvent(event) {
-  const destination = String(event?.destination || "").trim();
-  if (!destination) return false;
-  const ids = await getDispatchBotDestinationIds();
-  return ids.has(destination);
-}
-
-async function getDispatchBotDestinationIds() {
-  const manualIds = getConfiguredDispatchBotIds();
-  const tokens = getConfiguredDispatchTokens();
-  const cacheKey = JSON.stringify({ manualIds, tokens });
-  const now = Date.now();
-
-  if (dispatchBotInfoCache.key === cacheKey && dispatchBotInfoCache.expiresAt > now) {
-    return dispatchBotInfoCache.ids;
-  }
-
-  const ids = new Set(manualIds);
-  await Promise.all(tokens.map(async token => {
-    try {
-      const response = await fetch("https://api.line.me/v2/bot/info", {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      if (!response.ok) {
-        console.warn(`LINE dispatch bot info lookup failed: ${response.status}`);
-        return;
-      }
-      const info = await response.json();
-      if (info?.userId) ids.add(String(info.userId));
-      if (info?.basicId) ids.add(String(info.basicId));
-    } catch (error) {
-      console.warn("LINE dispatch bot info lookup failed:", error.message);
-    }
-  }));
-
-  dispatchBotInfoCache.key = cacheKey;
-  dispatchBotInfoCache.expiresAt = now + 60 * 60 * 1000;
-  dispatchBotInfoCache.ids = ids;
-  return ids;
+  const token = String(process.env.LINE_CHANNEL_ACCESS_TOKEN || "").trim();
+  return token ? [{ name: "OTZ", token, client: line }] : [];
 }
 
 function getReplyLineAccounts() {
-  const tokens = [
-    { name: "main", token: process.env.LINE_CHANNEL_ACCESS_TOKEN },
-    ...getDispatchLineAccounts().map(account => ({
-      name: account.name,
-      token: account.token
-    }))
-  ];
-  const seen = new Set();
-  return tokens
-    .map(account => ({
-      name: account.name,
-      token: String(account.token || "").trim()
-    }))
-    .filter(account => {
-      if (!account.token || seen.has(account.token)) return false;
-      seen.add(account.token);
-      return true;
-    })
-    .map(account => ({
-      name: account.name,
-      client: new messagingApi.MessagingApiClient({ channelAccessToken: account.token })
-    }));
+  return getDispatchLineAccounts();
 }
 
 function logLinePushError(label, error) {

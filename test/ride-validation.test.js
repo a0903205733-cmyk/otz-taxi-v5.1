@@ -11,6 +11,71 @@ import { ADDRESS, TEMPLE, geocodeResult, placeResult, mapsFetch, transportPlaces
 
 const source = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
 
+function loadFunctions(context, names) {
+  for (const name of names) {
+    const start = source.search(new RegExp(`^(?:async )?function ${name}\\(`, "m"));
+    assert.ok(start >= 0, name);
+    const next = source.slice(start + 1).search(/^(?:async )?function |^app\./m);
+    vm.runInContext(source.slice(start, next < 0 ? undefined : start + 1 + next), context);
+  }
+}
+
+test("unified OTZ sends and replies only through main even with legacy tokens configured", () => {
+  const mainClient = {};
+  const env = { LINE_CHANNEL_ACCESS_TOKEN: "main-token", LINE_CHANNEL_SECRET: "main-secret",
+    LINE_DISPATCH_TOKENS: "a1,a2,a3,a4", LINE_CHANNEL_SECRETS: "a1-secret,a2-secret" };
+  const context = vm.createContext({ process: { env }, line: mainClient });
+  loadFunctions(context, ["getDispatchLineAccounts", "getReplyLineAccounts", "getLineChannelSecrets"]);
+  for (const accounts of [context.getDispatchLineAccounts(), context.getReplyLineAccounts()]) {
+    assert.equal(accounts.length, 1);
+    assert.equal(accounts[0].name, "OTZ");
+    assert.equal(accounts[0].client, mainClient);
+  }
+  assert.equal(context.getLineChannelSecrets().join(","), "main-secret");
+  env.LINE_CHANNEL_ACCESS_TOKEN = "";
+  assert.equal(context.getDispatchLineAccounts().length, 0);
+});
+
+test("OTZ routing separates intake, reports and cancellations and ignores A1 webhooks", async t => {
+  const { context, calls } = harness(t);
+  loadFunctions(context, ["isDispatchBotTagged", "normalizeMainBotMention", "isOnlyDispatchBotMention", "isDispatchArrivalText"]);
+  const reports = [], cancellations = [];
+  context.handleDispatchBotTagged = async event => reports.push(event);
+  context.cancelIntakeRide = async (_, command) => cancellations.push(command);
+  context.BOT_RESUME_KEYWORDS = new Set();
+  context.HUMAN_HANDOFF_KEYWORDS = new Set();
+  context.isRideDetectionDisabledSource = () => true;
+  await context.handleLineEvent(intakeEvent());
+  assert.equal(calls.orders.length, 1);
+  await context.handleLineEvent(intakeEvent("@OTZ 訂單：01-00123\n9820/白/15"));
+  await context.handleLineEvent(intakeEvent("@OTZ 取消 01-00123"));
+  assert.equal(reports.length, 1);
+  assert.equal(cancellations.length, 1);
+  assert.equal(calls.orders.length, 1);
+  const dispatch = intakeEvent("@OTZ車隊\n抵達\n訂單：OTZ-000123");
+  dispatch.source.groupId = "test-group";
+  dispatch.message.mention.mentionees[0].length = 6;
+  await context.handleLineEvent(dispatch);
+  assert.equal(reports.length, 2);
+  assert.equal(context.isDispatchArrivalText(context.normalizeMainBotMention(dispatch, dispatch.message.text)), true);
+  dispatch.message.text = "@OTZ車隊";
+  assert.equal(context.isOnlyDispatchBotMention(context.normalizeMainBotMention(dispatch, dispatch.message.text)), true);
+  await context.handleLineEvent(dispatch);
+  assert.equal(reports.length, 3);
+  dispatch.destination = "a1";
+  await context.handleLineEvent(dispatch);
+  assert.equal(reports.length, 3);
+  dispatch.destination = "main-bot";
+  dispatch.message.text = "@A1 訂單：OTZ-000123\n9820/白/15";
+  dispatch.message.mention.mentionees[0].userId = "a1";
+  await context.handleLineEvent(dispatch);
+  delete dispatch.message.mention;
+  dispatch.message.text = "@OTZ 訂單：OTZ-000123\n抵達";
+  await context.handleLineEvent(dispatch);
+  assert.equal(reports.length, 3);
+  assert.equal(calls.orders.length, 1);
+});
+
 test("postal cleanup preserves house numbers and cleans the reported malformed input", () => {
   const pickup = "屏東縣崁頂鄉園寮村南州路1-2號";
   const destination = "屏東縣屏東市建民路104-3號";
@@ -135,7 +200,7 @@ test("second completion accepts only standalone arrival and not the ETA label", 
     replyMentionUser: async (_, user, __, text) => replies.push({ user, text }),
     getLineNickname: async () => "driver", logLinePushError() {}
   });
-  for (const name of ["handleDispatchBotTagged", "handleDispatchArrival", "isDispatchArrivalText", "parseDispatchCompletionText", "parseDispatchCompletionSegment"]) {
+  for (const name of ["normalizeMainBotMention", "handleDispatchBotTagged", "handleDispatchArrival", "isDispatchArrivalText", "parseDispatchCompletionText", "parseDispatchCompletionSegment"]) {
     const start = source.search(new RegExp(`^(?:async )?function ${name}\\(`, "m"));
     const next = source.slice(start + 1).search(/^(?:async )?function /m);
     vm.runInContext(source.slice(start, start + 1 + next), context);
