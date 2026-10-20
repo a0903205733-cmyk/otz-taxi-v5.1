@@ -299,7 +299,7 @@ async function handleText(event) {
   }
   if (incomingText === "我想叫車" || incomingText === "我要叫車") {
     clearPendingRideConfirmation(event);
-    rememberPendingRideFormReply(event);
+    rememberPendingRideFormReply(event, incomingText === "我要叫車");
     const nickname = await getLineNickname(event);
     return reply(
       event.replyToken,
@@ -477,7 +477,7 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings, 
     });
   } catch (error) {
     if (error.code === "LOCATION_UNVERIFIED") {
-      if (error.confirmationMessage) return reply(event.replyToken, error.confirmationMessage);
+      if (error.confirmationMessage) return replyLocationClarificationOnce(event, error.confirmationMessage);
       return;
     }
     console.error("Quote error:", error);
@@ -529,7 +529,7 @@ async function handleMutedText(event) {
         `預估車資：約 ${fare.estimatedFare} 元`
     );
   } catch (error) {
-    if (error.confirmationMessage) return reply(event.replyToken, error.confirmationMessage);
+    if (error.confirmationMessage) return replyLocationClarificationOnce(event, error.confirmationMessage);
     console.error("Muted quote error:", error);
     return;
   }
@@ -568,7 +568,7 @@ async function getVerifiedRideInput(parsed, event) {
   try {
     return await validateRideLocations(parsed, process.env.GOOGLE_MAPS_API_KEY);
   } catch (error) {
-    if (event && error.confirmationMessage) await reply(event.replyToken, error.confirmationMessage);
+    if (event && error.confirmationMessage) await replyLocationClarificationOnce(event, error.confirmationMessage);
     console.log("Ignored unverified ride locations:", error.code || "VALIDATION_FAILED");
     return null;
   }
@@ -584,11 +584,18 @@ function rememberPendingRideConfirmation(event, parsed) {
   });
 }
 
-function rememberPendingRideFormReply(event) {
+async function replyLocationClarificationOnce(event, message) {
+  const pending = getPendingRideFormReply(event);
+  if (!pending?.allowLocationNotice || pending.locationNoticeSent) return;
+  pending.locationNoticeSent = true;
+  return reply(event.replyToken, message);
+}
+
+function rememberPendingRideFormReply(event, allowLocationNotice = false) {
   const key = getRideConfirmationKey(event);
   if (!key) return;
   cleanupPendingRideFormReplies();
-  pendingRideFormReplies.set(key, { createdAt: Date.now() });
+  pendingRideFormReplies.set(key, { createdAt: Date.now(), allowLocationNotice, locationNoticeSent: false });
 }
 
 function getPendingRideFormReply(event) {
