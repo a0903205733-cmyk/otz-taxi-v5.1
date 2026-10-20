@@ -83,6 +83,13 @@ function hasText(value) {
 
 function normalize(value) {
   return String(value || "").normalize("NFKC").replace(/臺/gu, "台")
+    .replace(/([一二三四五六七八九十]{1,3})段/gu, (match, section) => {
+      const digits = "零一二三四五六七八九";
+      if (!section.includes("十")) return section.length === 1 ? `${digits.indexOf(section)}段` : match;
+      const [tens, ones, extra] = section.split("十");
+      if (extra !== undefined || tens.length > 1 || ones.length > 1) return match;
+      return `${(tens ? digits.indexOf(tens) : 1) * 10 + (ones ? digits.indexOf(ones) : 0)}段`;
+    })
     .replace(/(\d+)號之(\d+)/gu, "$1-$2號")
     .replace(/(\d+)之(\d+)號/gu, "$1-$2號")
     .replace(/[\s,，()（）]/gu, "").toLowerCase();
@@ -98,8 +105,8 @@ export function extractLocationCandidate(value) {
   if (/^(?:好|好的|謝謝|收到|出發|準時|取消|不用|不要|繼續|等一下|尚未提供|上車點|下車點|附近|這裡|那裡)$/u.test(query)) return null;
   if (/(?:是否|怎麼|為什麼|多少|沒有|不是|找不到|到了|到家|到站|還沒|稍等|請稍|請問|聊天|叫車|試算|車資|今天|明天|等一下|不需要)/u.test(query)) return null;
   if (!/^[\p{L}\p{N}\s()（）·・'&.\-之]+$/u.test(query)) return null;
-  const house = /\d+(?:[-之]\d+)?號(?:之\d+)?/u.test(query);
-  const road = /(?:路|街|大道)(?:[一二三四五六七八九十\d]+段)?(?:\d+巷)?(?:\d+弄)?$/u.test(query);
+  const house = /\d+(?:[-之]\d+)?號(?:之\d+)?/u.test(normalize(query));
+  const road = /(?:路|街|大道)(?:[一二三四五六七八九十\d]+段)?(?:\d+巷)?(?:\d+弄)?$/u.test(normalize(query));
   return { query, kind: house || road ? "address" : "place" };
 }
 
@@ -112,10 +119,10 @@ export async function validateLocation(value, apiKey) {
     try {
       return await lookup(candidate, apiKey);
     } catch (error) {
-      // Village names can change; retry only while keeping explicit city,
-      // district, road and house number, with all normal checks still enabled.
+      // Village names can change; preserve any supplied city and require an
+      // explicit district, road and house number for this retry.
       const withoutVillage = candidate.kind === "address" ? candidate.query.replace(
-        /^((?:台灣|臺灣)?[\p{Script=Han}]{2,3}[縣市][\p{Script=Han}]{1,4}[區鄉鎮市])[\p{Script=Han}]{1,6}[村里](?=[\p{Script=Han}]+(?:路|街|大道).*\d+(?:[-之]\d+)?號)/u,
+        /^((?:(?:台灣|臺灣)?[\p{Script=Han}]{2,3}[縣市])?[\p{Script=Han}]{1,4}[區鄉鎮市])[\p{Script=Han}]{1,6}[村里](?=[\p{Script=Han}]+(?:路|街|大道).*\d+(?:[-之]\d+)?號)/u,
         "$1"
       ) : candidate.query;
       if (error.allowAreaRetry && withoutVillage !== candidate.query) {
@@ -365,11 +372,12 @@ async function searchPlace(candidate, apiKey) {
   }
   if (!alias) {
     const district = (place.addressComponents || []).find(isDistrict);
-    const suppliedCity = normalize(candidate.query).match(/^[\p{Script=Han}]{2,3}[縣市]/u)?.[0];
-    if (!district || !componentNames(district).some(name =>
-      normalize(candidate.query).includes(name) && normalize(place.formattedAddress).includes(name)) ||
+    const query = normalize(candidate.query);
+    const suppliedCity = query.match(/^[\p{Script=Han}]{2,3}[縣市]/u)?.[0];
+    const suppliedDistrict = query.slice(suppliedCity?.length || 0).match(/^[\p{Script=Han}]{1,4}[區鄉鎮市]/u)?.[0];
+    if ((suppliedDistrict && (!district || !componentNames(district).includes(suppliedDistrict))) ||
       (suppliedCity && !normalize(place.formattedAddress).includes(suppliedCity))) {
-      throw unverified("place township needs confirmation");
+      throw unverified("place supplied area conflicts");
     }
   }
   return {

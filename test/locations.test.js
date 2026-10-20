@@ -219,13 +219,41 @@ test("multiple house numbers must be clarified, not reduced to the first number"
     error => error.confirmationMessage.includes("請確認地點"));
 });
 
-test("non-alias places need a matching township and unique name", async t => {
+test("non-alias places may omit township but supplied township must match", async t => {
   const place = placeResult({ displayName: { text: "測試餐廳" }, primaryType: "restaurant" });
   stub(t, { places: [place] });
-  await assert.rejects(validateLocation("測試餐廳", "test-key"),
-    error => error.confirmationMessage.includes("鄉鎮市區"));
+  assert.equal((await validateLocation("測試餐廳", "test-key")).placeId, place.id);
   assert.equal((await validateLocation("東港鎮測試餐廳", "test-key")).placeId, place.id);
   await assert.rejects(validateLocation("潮州鎮測試餐廳", "test-key"), { code: "LOCATION_UNVERIFIED" });
+});
+
+test("address sections, whitespace and omitted areas normalize without changing the house", async t => {
+  const result = geocodeResult({ formatted_address: "928台灣屏東縣東港鎮中正路3段87號" });
+  result.address_components[3].long_name = "中正路三段";
+  result.address_components[4].long_name = "87";
+  stub(t, { geocode: [result] });
+  for (const query of ["中正路三段87號", "東港鎮中正路3段87號", "中正路 三段 ８７ 號"]) {
+    assert.equal((await validateLocation(query, "test-key")).placeId, result.place_id);
+  }
+  for (const query of ["中正路二段87號", "中正路三段8號", "潮州鎮中正路三段87號"]) {
+    await assert.rejects(validateLocation(query, "test-key"), { code: "LOCATION_UNVERIFIED" });
+  }
+});
+
+test("village retry allows omitted county but never omits the supplied district", async t => {
+  const result = geocodeResult({ formatted_address: "屏東縣東港鎮興台里中山路5號" });
+  result.address_components[4].long_name = "5";
+  result.address_components.push({ long_name: "興台里", types: ["neighborhood"] });
+  const calls = stub(t, { geocode: [result] });
+  assert.equal((await validateLocation("東港鎮共和里中山路5號", "test-key")).query, "東港鎮中山路5號");
+  assert.deepEqual(calls.map(call => new URL(call.url).searchParams.get("address")),
+    ["東港鎮共和里中山路5號", "東港鎮中山路5號"]);
+});
+
+test("bare place names still reject duplicate and near-name candidates", async t => {
+  const place = placeResult({ displayName: { text: "測試餐廳" }, primaryType: "restaurant" });
+  stub(t, { places: [place, { ...place, id: "second" }] });
+  await assert.rejects(validateLocation("測試餐廳", "test-key"), { code: "LOCATION_UNVERIFIED" });
 });
 
 test("nearby name scores below the acceptance threshold still require confirmation", async t => {

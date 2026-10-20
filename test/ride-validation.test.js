@@ -548,7 +548,10 @@ test("valid fare endpoints produce a quote only after validation", async t => {
 
 test("unclear place prompts for clarification; standalone 1 cannot create an order", async t => {
   const place = placeResult({ displayName: { text: "測試餐廳" }, primaryType: "restaurant" });
-  const { context, calls, event } = harness(t, { places: [place] });
+  const other = placeResult({ id: "other", displayName: { text: "測試餐廳" },
+    primaryType: "restaurant", formattedAddress: "屏東縣潮州鎮中山路1號" });
+  other.addressComponents[2].longText = "潮州鎮";
+  const { context, calls, event } = harness(t, { places: [place, other] });
   await context.handleText(event("測試餐廳"));
   assert.equal(calls.confirmations.length, 0);
   assert.match(calls.replies[0], /請確認地點/u);
@@ -562,7 +565,10 @@ test("unclear place prompts for clarification; standalone 1 cannot create an ord
 
 test("fare intent survives clarification and quotes only after complete locations", async t => {
   const place = placeResult({ displayName: { text: "測試餐廳" }, primaryType: "restaurant" });
-  const { context, calls, event } = harness(t, { fareIntent: true, places: [place] });
+  const other = placeResult({ id: "other", displayName: { text: "測試餐廳" },
+    primaryType: "restaurant", formattedAddress: "屏東縣潮州鎮中山路1號" });
+  other.addressComponents[2].longText = "潮州鎮";
+  const { context, calls, event } = harness(t, { fareIntent: true, places: [place, other] });
   await context.handleText(event(`${ADDRESS}到測試餐廳`));
   assert.match(calls.replies[0], /請確認地點/u);
   assert.equal(calls.orders.length, 0);
@@ -570,6 +576,17 @@ test("fare intent survives clarification and quotes only after complete location
   await context.handleText(event(`${ADDRESS}到東港鎮測試餐廳`));
   assert.equal(calls.orders.length, 1);
   assert.equal(calls.orders[0].status, "awaiting_customer");
+});
+
+test("unique place without township works for ride confirmation and fare quote", async t => {
+  const place = placeResult({ displayName: { text: "測試餐廳" }, primaryType: "restaurant" });
+  const { context, calls, event } = harness(t, { places: [place] });
+  await context.handleText(event("測試餐廳"));
+  assert.equal(calls.confirmations.length, 1);
+  assert.equal(calls.orders.length, 0);
+  await context.handleText(event(`試算車資 ${ADDRESS}到測試餐廳`));
+  assert.equal(calls.orders.length, 1);
+  assert.equal(calls.orders[0].destination, "測試餐廳");
 });
 
 test("scenic names enter ride confirmation and validated fare routes", async t => {
