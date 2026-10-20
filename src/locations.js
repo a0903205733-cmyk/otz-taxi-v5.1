@@ -19,7 +19,7 @@ const PLACE_TYPES = new Set([
   "administrative_area_level_2", "administrative_area_level_3"
 ]);
 const NAME_THRESHOLD = 0.9;
-const NAME_TIE_MARGIN = 0.02;
+const NAME_TIE_MARGIN = 0.05;
 const TIMEOUT_MS = 8000;
 const DISTRICT_TYPES = new Set([
   "locality", "administrative_area_level_2", "administrative_area_level_3",
@@ -119,7 +119,12 @@ export async function validateLocation(value, apiKey) {
       return { ...result, query: candidate.query };
     }
   } catch (error) {
-    if (error.code === "LOCATION_UNVERIFIED") throw error;
+    if (error.code === "LOCATION_UNVERIFIED") {
+      if (!/HTTP|provider/u.test(error.message)) {
+        error.confirmationMessage = `請確認地點「${candidate.query}」。目前無法唯一確認符合的地址。\n請重新提供上下車地點，包含鄉鎮市區、完整路名與門牌；景點或店家請提供鄉鎮市區及完整名稱。\n確認前不會建立派車單或試算車資。`;
+      }
+      throw error;
+    }
     // Do not leak URLs containing API keys or provider error payloads into logs.
     throw unverified("provider unavailable or malformed response");
   }
@@ -248,7 +253,15 @@ async function geocodeAddress(candidate, apiKey) {
   });
   if (!response.ok) throw unverified(`geocoding HTTP ${response.status}`);
   const payload = await response.json();
-  if (payload.status !== "OK" || !Array.isArray(payload.results)) throw unverified("geocoding rejected", payload.status === "ZERO_RESULTS");
+  if (payload.status === "ZERO_RESULTS") throw unverified("address not found", true);
+  if (payload.status !== "OK" || !Array.isArray(payload.results)) throw unverified("provider geocoding rejected");
+  const first = repairPostalNumberSuffix(candidate.query, payload.results[0] || {});
+  if ((normalize(candidate.query).match(/\d+(?:-\d+)?號/gu) || []).length !== 1 ||
+      !matchesAddress(candidate.query, first) ||
+      !inServiceArea(first.address_components || [], first.formatted_address,
+        { latitude: first.geometry?.location?.lat, longitude: first.geometry?.location?.lng })) {
+    throw unverified("first address does not match road and house number", true);
+  }
   const candidates = payload.results.map(result => repairPostalNumberSuffix(candidate.query, result))
     .filter(result => matchesAddress(candidate.query, result)).map(result => ({
     query: candidate.query, kind: "address", placeId: result.place_id,
@@ -323,22 +336,32 @@ async function searchPlace(candidate, apiKey) {
   });
   if (!response.ok) throw unverified(`places HTTP ${response.status}`);
   const payload = await response.json();
+  if (payload.error) throw unverified("provider places rejected");
   // Additional pages mean uniqueness cannot be established from this response.
   const places = payload.places === undefined && !payload.error ? [] : payload.places;
   if (payload.nextPageToken || !Array.isArray(places)) throw unverified("incomplete place candidates", Boolean(payload.nextPageToken));
   const ranked = places.map(place => ({ place,
     score: alias ? landmarkAliasScore(alias, place) : placeNameScore(candidate.query, place) }))
-    .filter(item => item.score >= NAME_THRESHOLD).sort((a, b) => b.score - a.score);
+    .filter(item => item.score >= NAME_THRESHOLD - NAME_TIE_MARGIN).sort((a, b) => b.score - a.score);
   const best = ranked[0];
-  if (!best) throw unverified("place name mismatch", true);
+  if (!best || best.score < NAME_THRESHOLD) throw unverified("place name mismatch", true);
   if (ranked.some(item => item !== best && item.place.id !== best.place.id &&
-      best.score - item.score <= NAME_TIE_MARGIN)) throw unverified("ambiguous place name", true);
+      best.score - item.score <= (alias ? 0.02 : NAME_TIE_MARGIN))) throw unverified("ambiguous place name", true);
   const place = best.place;
   const allowedType = alias ? landmarkAliasScore(alias, place) > 0 : (place.primaryType ? PLACE_TYPES.has(place.primaryType) :
     place.types?.some(type => PLACE_TYPES.has(type)));
   if (!hasText(place.id) || !hasText(place.formattedAddress) || !allowedType ||
       !inServiceArea(place.addressComponents || [], place.formattedAddress, place.location)) {
     throw unverified("place metadata, type or service area rejected");
+  }
+  if (!alias) {
+    const district = (place.addressComponents || []).find(isDistrict);
+    const suppliedCity = normalize(candidate.query).match(/^[\p{Script=Han}]{2,3}[縣市]/u)?.[0];
+    if (!district || !componentNames(district).some(name =>
+      normalize(candidate.query).includes(name) && normalize(place.formattedAddress).includes(name)) ||
+      (suppliedCity && !normalize(place.formattedAddress).includes(suppliedCity))) {
+      throw unverified("place township needs confirmation");
+    }
   }
   return {
     query: candidate.query, kind: "place", placeId: place.id,

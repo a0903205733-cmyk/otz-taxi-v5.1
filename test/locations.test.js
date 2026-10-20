@@ -34,9 +34,9 @@ test("rail station suffixes match nationwide without a per-station alias", async
   for (const station of ["西勢", "竹田", "台北", "台中", "花蓮", "台東"]) {
     for (const [input, output] of [["車站", "火車站"], ["火車站", "車站"]]) {
       places = [placeResult({ id: station, displayName: { text: station + output }, primaryType: "train_station" })];
-      const result = await validateLocation(station + input, "test-key");
+      const result = await validateLocation("東港鎮" + station + input, "test-key");
       assert.equal(result.placeId, station);
-      assert.equal(result.query, station + input);
+      assert.equal(result.query, "東港鎮" + station + input);
     }
   }
 });
@@ -58,7 +58,7 @@ test("rail suffix matching rejects other station names, bus stops and ambiguity"
 });
 
 test("religious places still require unique names and complete metadata", async t => {
-  const query = "測試宗祠";
+  const query = "東港鎮測試宗祠";
   const place = placeResult({ displayName: { text: query }, primaryType: "place_of_worship", types: ["place_of_worship"] });
   let places = [place];
   t.mock.method(globalThis, "fetch", async () => Response.json({ places }));
@@ -74,7 +74,7 @@ test("religious places still require unique names and complete metadata", async 
 });
 
 test("all organization IDs are eligible but incomplete or ambiguous places are rejected", async t => {
-  const query = "測試發展協會";
+  const query = "東港鎮測試發展協會";
   const organization = placeResult({ id: "any-organization", displayName: { text: query },
     primaryType: "association_or_organization", types: ["association_or_organization"] });
   let places = [organization];
@@ -117,7 +117,7 @@ for (const type of ["tourist_attraction", "beach", "scenic_spot", "observation_d
     const place = placeResult({ displayName: { text: "測試觀景台" }, primaryType: type,
       types: [type], formattedAddress: "屏東縣東港鎮" });
     stub(t, { places: [place] });
-    assert.equal((await validateLocation("測試觀景台", "test-key")).placeId, place.id);
+    assert.equal((await validateLocation("東港鎮測試觀景台", "test-key")).placeId, place.id);
   });
 }
 
@@ -158,6 +158,43 @@ test("exact address preserves input and verified coordinates", async t => {
   assert.equal(result.query, ADDRESS);
   assert.deepEqual(result.location, { latitude: 22.465, longitude: 120.45 });
   assert.equal(new URL(calls[0].url).searchParams.get("address"), ADDRESS);
+});
+
+test("does not skip a mismatching first address to auto-select a later result", async t => {
+  stub(t, { geocode: [geocodeResult({ partial_match: true }), geocodeResult({ place_id: "second" })] });
+  await assert.rejects(validateLocation(ADDRESS, "test-key"), error =>
+    error.code === "LOCATION_UNVERIFIED" && error.confirmationMessage.includes("請確認地點"));
+});
+
+test("one matching first address may be accepted despite unrelated later results", async t => {
+  stub(t, { geocode: [geocodeResult(), geocodeResult({ place_id: "second", formatted_address: "台北市中山路99號" })] });
+  assert.equal((await validateLocation(ADDRESS, "test-key")).placeId, "address-12");
+});
+
+test("multiple house numbers must be clarified, not reduced to the first number", async t => {
+  stub(t);
+  await assert.rejects(validateLocation("東港中正路三段87號89號", "test-key"),
+    error => error.confirmationMessage.includes("請確認地點"));
+});
+
+test("non-alias places need a matching township and unique name", async t => {
+  const place = placeResult({ displayName: { text: "測試餐廳" }, primaryType: "restaurant" });
+  stub(t, { places: [place] });
+  await assert.rejects(validateLocation("測試餐廳", "test-key"),
+    error => error.confirmationMessage.includes("鄉鎮市區"));
+  assert.equal((await validateLocation("東港鎮測試餐廳", "test-key")).placeId, place.id);
+  await assert.rejects(validateLocation("潮州鎮測試餐廳", "test-key"), { code: "LOCATION_UNVERIFIED" });
+});
+
+test("nearby name scores below the acceptance threshold still require confirmation", async t => {
+  const name = "測試海景餐廳咖啡館附設觀景花園園區";
+  const places = [
+    placeResult({ displayName: { text: name + "甲" }, primaryType: "restaurant" }),
+    placeResult({ id: "other", displayName: { text: name + "乙丙" }, primaryType: "restaurant" })
+  ];
+  stub(t, { places });
+  await assert.rejects(validateLocation("東港鎮" + name, "test-key"),
+    error => error.message.includes("ambiguous") && error.confirmationMessage.includes("請確認地點"));
 });
 
 for (const [name, query, result] of [
@@ -397,6 +434,7 @@ test("unresolved township street address retries once with Pingtung County", asy
 test("unresolved township place retries with Pingtung without accepting conflicting counties", async t => {
   const calls = [];
   const place = placeResult({ displayName: { text: "長治鄉" }, formattedAddress: "屏東縣長治鄉", primaryType: "administrative_area_level_2" });
+  place.addressComponents[2].longText = "長治鄉";
   t.mock.method(globalThis, "fetch", async (_url, init) => {
     calls.push(JSON.parse(init.body).textQuery);
     return Response.json(calls.length === 1 ? {} : { places: [place] });

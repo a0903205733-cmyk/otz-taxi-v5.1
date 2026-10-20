@@ -335,7 +335,7 @@ async function handleText(event) {
   }
 
   // All input paths, including active fare/form flows, require verified places.
-  const verified = await getVerifiedRideInput(parsed);
+  const verified = await getVerifiedRideInput(parsed, event);
   if (!verified) {
     clearPendingRideConfirmation(event);
     return;
@@ -397,7 +397,7 @@ async function handleText(event) {
 
 async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings, options = {}) {
   const directIntake = options.intake === true && isIntakeGroup(event) && !isFareQuoteRequest;
-  if (!directIntake) parsed = await getVerifiedRideInput(parsed);
+  if (!directIntake) parsed = await getVerifiedRideInput(parsed, event);
   if (directIntake && !String(parsed?.pickup || "").trim()) return;
   if (!parsed || (isFareQuoteRequest && !parsed.destination)) return;
   try {
@@ -476,7 +476,10 @@ async function createLineRideOrder(event, parsed, isFareQuoteRequest, settings, 
       messages: [quoteFlex(order)]
     });
   } catch (error) {
-    if (error.code === "LOCATION_UNVERIFIED") return;
+    if (error.code === "LOCATION_UNVERIFIED") {
+      if (error.confirmationMessage) return reply(event.replyToken, error.confirmationMessage);
+      return;
+    }
     console.error("Quote error:", error);
     if (["INVALID_RIDE_TIME", "RIDE_TIME_EXPIRED"].includes(error.code)) {
       return reply(event.replyToken, `⚠️ ${error.message}`);
@@ -526,6 +529,7 @@ async function handleMutedText(event) {
         `預估車資：約 ${fare.estimatedFare} 元`
     );
   } catch (error) {
+    if (error.confirmationMessage) return reply(event.replyToken, error.confirmationMessage);
     console.error("Muted quote error:", error);
     return;
   }
@@ -560,10 +564,11 @@ function hasFareQuoteIntentToday(event) {
   return key ? dailyFareQuoteIntents.has(key) : false;
 }
 
-async function getVerifiedRideInput(parsed) {
+async function getVerifiedRideInput(parsed, event) {
   try {
     return await validateRideLocations(parsed, process.env.GOOGLE_MAPS_API_KEY);
   } catch (error) {
+    if (event && error.confirmationMessage) await reply(event.replyToken, error.confirmationMessage);
     console.log("Ignored unverified ride locations:", error.code || "VALIDATION_FAILED");
     return null;
   }

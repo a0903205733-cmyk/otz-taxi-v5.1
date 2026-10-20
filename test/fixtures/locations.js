@@ -50,7 +50,8 @@ export function placeResult(overrides = {}) {
 export function mapsFetch(calls, { geocode = [geocodeResult()], places = [placeResult()] } = {}) {
   return async (url, init = {}) => {
     calls.push({ url: String(url), ...init });
-    if (String(url).includes("/geocode/")) return Response.json({ status: "OK", results: geocode });
+    if (String(url).includes("/geocode/")) return Response.json({ status: "OK",
+      results: typeof geocode === "function" ? geocode(new URL(url).searchParams.get("address")) : geocode });
     if (String(url).includes("places:searchText")) return Response.json({ places });
     if (String(url).includes("computeRoutes")) return Response.json({ routes: [{ distanceMeters: 10000, duration: "900s" }] });
     throw new Error("Unexpected endpoint");

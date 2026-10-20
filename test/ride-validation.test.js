@@ -519,7 +519,8 @@ test("fare keyword followed by a partial address produces no quote or order", as
   await context.handleText(event("試算車資"));
   assert.equal(calls.replies.length, 1);
   await context.handleText(event(`${ADDRESS}到${TEMPLE}`));
-  assert.equal(calls.replies.length, 1);
+  assert.equal(calls.replies.length, 2);
+  assert.match(calls.replies[1], /請確認地點/u);
   assert.equal(calls.orders.length, 0);
   assert.equal(calls.customerWrites, 0);
 });
@@ -528,7 +529,8 @@ test("existing fare intent and inline keyword cannot bypass ambiguous Places", a
   const { context, calls, event } = harness(t, { fareIntent: true, places: [placeResult(), placeResult({ id: "other" })] });
   await context.handleText(event(`${ADDRESS}到${TEMPLE}`));
   await context.handleText(event(`試算車資 ${ADDRESS}到${TEMPLE}`));
-  assert.equal(calls.replies.length, 0);
+  assert.equal(calls.replies.length, 2);
+  assert.ok(calls.replies.every(text => text.includes("請確認地點")));
   assert.equal(calls.orders.length, 0);
   assert.equal(calls.google.some(call => call.url.includes("computeRoutes")), false);
 });
@@ -544,8 +546,34 @@ test("valid fare endpoints produce a quote only after validation", async t => {
   assert.equal(calls.confirmations.length, 0);
 });
 
+test("unclear place prompts for clarification; standalone 1 cannot create an order", async t => {
+  const place = placeResult({ displayName: { text: "測試餐廳" }, primaryType: "restaurant" });
+  const { context, calls, event } = harness(t, { places: [place] });
+  await context.handleText(event("測試餐廳"));
+  assert.equal(calls.confirmations.length, 0);
+  assert.match(calls.replies[0], /請確認地點/u);
+  await context.handleText(event("1"));
+  assert.equal(calls.orders.length, 0);
+  assert.equal(calls.customerWrites, 0);
+  await context.handleText(event("東港鎮測試餐廳"));
+  assert.equal(calls.confirmations.length, 1);
+  assert.equal(calls.orders.length, 0);
+});
+
+test("fare intent survives clarification and quotes only after complete locations", async t => {
+  const place = placeResult({ displayName: { text: "測試餐廳" }, primaryType: "restaurant" });
+  const { context, calls, event } = harness(t, { fareIntent: true, places: [place] });
+  await context.handleText(event(`${ADDRESS}到測試餐廳`));
+  assert.match(calls.replies[0], /請確認地點/u);
+  assert.equal(calls.orders.length, 0);
+  assert.equal(calls.google.some(call => call.url.includes("computeRoutes")), false);
+  await context.handleText(event(`${ADDRESS}到東港鎮測試餐廳`));
+  assert.equal(calls.orders.length, 1);
+  assert.equal(calls.orders[0].status, "awaiting_customer");
+});
+
 test("scenic names enter ride confirmation and validated fare routes", async t => {
-  const names = ["測試沙灘", "測試觀景台"];
+  const names = ["東港鎮測試沙灘", "東港鎮測試觀景台"];
   const places = names.map((name, index) => placeResult({ id: `scenic-${index}`,
     displayName: { text: name }, primaryType: index ? "observation_deck" : "beach" }));
   const { context, calls, event } = harness(t, { places });
@@ -558,7 +586,7 @@ test("scenic names enter ride confirmation and validated fare routes", async t =
 });
 
 test("organizations enter ride and fare flows only after unique place validation", async t => {
-  const query = "測試發展協會";
+  const query = "東港鎮測試發展協會";
   const organization = placeResult({ id: "organization", displayName: { text: query },
     primaryType: "association_or_organization", types: ["association_or_organization"] });
   const { context, calls, event } = harness(t, { places: [organization, placeResult()] });
@@ -588,7 +616,7 @@ test("customer temple routes and bare HSR shorthand reach confirmation", async t
 });
 
 test("religious places enter ride and fare flows without an alias", async t => {
-  const names = ["測試寺", "測試教堂", "測試清真寺", "測試宗祠", "測試精舍"];
+  const names = ["測試寺", "測試教堂", "測試清真寺", "測試宗祠", "測試精舍"].map(name => "東港鎮" + name);
   const places = names.map((name, index) => placeResult({ id: `religion-${index}`,
     displayName: { text: name }, primaryType: "place_of_worship", types: ["place_of_worship"] }));
   const { context, calls, event } = harness(t, { places });
@@ -602,14 +630,16 @@ test("religious places enter ride and fare flows without an alias", async t => {
 
 test("Xishi to Linbian works for ride confirmation and fare calculation", async t => {
   const places = [placeResult({ id: "xishi", displayName: { text: "西勢火車站" },
-    formattedAddress: "屏東縣竹田鄉西勢村西豐路2號", primaryType: "train_station" }),
+    formattedAddress: "屏東縣竹田鄉西勢村西豐路2號", primaryType: "train_station",
+    addressComponents: [{ longText: "台灣", shortText: "TW", types: ["country"] },
+      { longText: "竹田鄉", types: ["administrative_area_level_3"] }] }),
     transportPlaces.find(item => item.query === "林邊火車站").place];
   const { context, calls, event } = harness(t, { places });
-  await context.handleText(event("西勢車站到林邊車站"));
+  await context.handleText(event("竹田鄉西勢車站到林邊車站"));
   assert.equal(calls.confirmations.length, 1);
-  assert.equal(calls.confirmations[0].pickup, "西勢車站");
+  assert.equal(calls.confirmations[0].pickup, "竹田鄉西勢車站");
   assert.equal(calls.confirmations[0].destination, "林邊車站");
-  await context.handleText(event("試算車資 西勢車站到林邊車站"));
+  await context.handleText(event("試算車資 竹田鄉西勢車站到林邊車站"));
   assert.equal(calls.orders.length, 1);
 });
 
@@ -619,12 +649,12 @@ for (const fareIntent of [false, true]) {
       transportPlaces.find(item => item.query === "林邊火車站").place];
     const { context, calls, event } = harness(t, { places, fareIntent });
     for (const suffix of ["多少", "多少錢？", "要多少錢", "車資多少", "大概要多少錢？"]) {
-      await context.handleText(event(`西勢車站到林邊車站${suffix}`));
+      await context.handleText(event(`東港鎮西勢車站到林邊車站${suffix}`));
     }
     assert.equal(calls.orders.length, 5);
     assert.equal(calls.confirmations.length, 0);
     for (const order of calls.orders) {
-      assert.equal(order.pickup, "西勢車站");
+      assert.equal(order.pickup, "東港鎮西勢車站");
       assert.equal(order.destination, "林邊車站");
       assert.equal(order.status, "awaiting_customer");
     }
@@ -670,7 +700,7 @@ for (const form of [false, true]) {
     target.address_components[2].long_name = "屏東市";
     target.address_components[3].long_name = "建民路";
     target.address_components[4].long_name = "104-3號";
-    const { context, calls, event } = harness(t, { form, geocode: [postalSuffixResult(), target] });
+    const { context, calls, event } = harness(t, { form, geocode: query => query === destination ? [target] : [postalSuffixResult()] });
     await context.handleText(event(`上車地點：${pickup}\n下車地點：${destination}`));
     assert.equal(calls.confirmations.length, 1);
     assert.equal(calls.confirmations[0].pickup, pickup);
@@ -690,7 +720,7 @@ test("two unlabeled address lines are verified before fare calculation", async t
   target.address_components[2].long_name = "新園鄉";
   target.address_components[3].long_name = "聖心路106巷";
   target.address_components[4].long_name = "2";
-  const { context, calls, event } = harness(t, { geocode: [origin, target] });
+  const { context, calls, event } = harness(t, { geocode: query => query === destination ? [target] : [origin] });
   await context.handleText(event(`試算車資\n${pickup}\n${destination}`));
   assert.equal(calls.orders.length, 1);
   assert.equal(calls.orders[0].pickup, pickup);
@@ -754,7 +784,8 @@ test("valid single-pickup confirmation writes verified coordinates", async t => 
 test("muted quote handler applies the same strict validation", async t => {
   const { context, calls, event } = harness(t, { geocode: [geocodeResult({ partial_match: true })] });
   await context.handleMutedText(event(`試算車資 ${ADDRESS}到${TEMPLE}`));
-  assert.equal(calls.replies.length, 0);
+  assert.equal(calls.replies.length, 1);
+  assert.match(calls.replies[0], /請確認地點/u);
   assert.equal(calls.orders.length, 0);
   assert.equal(calls.google.some(call => call.url.includes("computeRoutes")), false);
 });
