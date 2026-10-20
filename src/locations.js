@@ -1,4 +1,4 @@
-import { isPlaceholderPlace, stripAddressPostalCode } from "./parser.js";
+import { isPlaceholderPlace, normalizeAddressInput } from "./parser.js";
 
 const PLACE_TYPES = new Set([
   "airport", "bus_station", "bus_stop", "train_station", "subway_station",
@@ -89,7 +89,7 @@ function normalize(value) {
 }
 
 export function extractLocationCandidate(value) {
-  const query = stripAddressPostalCode(String(value || "").normalize("NFKC").trim()
+  const query = normalizeAddressInput(String(value || "").normalize("NFKC").trim()
     .replace(/^(?:請問|麻煩|請)?\s*(?:幫我叫車到|幫我叫車|我想叫車|我要叫車|叫車|我現在在|我在|位置在|地址是|上車地點|下車地點|上車地址|下車地址|地址|從)\s*[：:,，]?\s*/u, "")
     .replace(/[，,。!！\s]*(?:謝謝|麻煩了|請幫我叫車)[。!！\s]*$/u, "")
     .trim());

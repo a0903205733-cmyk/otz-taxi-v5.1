@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { extractLocationCandidate, validateLocation, validateRideLocations } from "../src/locations.js";
 import { getRoute } from "../src/maps.js";
 import { postalSuffixResult } from "./fixtures/locations.js";
+import { normalizeAddressInput, parseRideRequest } from "../src/parser.js";
 import { ADDRESS, TEMPLE, geocodeResult, placeResult, mapsFetch, transportPlaces } from "./fixtures/locations.js";
 
 function stub(t, options) {
@@ -10,6 +11,22 @@ function stub(t, options) {
   t.mock.method(globalThis, "fetch", mapsFetch(calls, options));
   return calls;
 }
+
+test("Donggang street addresses supply the omitted township suffix only once", () => {
+  for (const prefix of ["", "屏東縣", "928屏東縣"]) {
+    const input = `${prefix}東港中正路三段87號89號`;
+    const expected = `${prefix ? "屏東縣" : ""}東港鎮中正路三段87號89號`;
+    assert.equal(normalizeAddressInput(input), expected);
+    assert.equal(extractLocationCandidate(input).query, expected);
+    assert.equal(normalizeAddressInput(expected), expected);
+  }
+  for (const name of ["東港碼頭", "東港海事", "東港東隆宮", "東港鎮海宮", "宜蘭縣東港路87號"]) {
+    assert.equal(normalizeAddressInput(name), name);
+  }
+  const ride = parseRideRequest("上車地點：東港中正路三段87號89號\n下車地點：東港中山路12號");
+  assert.equal(ride.pickup, "東港鎮中正路三段87號89號");
+  assert.equal(ride.destination, "東港鎮中山路12號");
+});
 
 test("rail station suffixes match nationwide without a per-station alias", async t => {
   let places = [];

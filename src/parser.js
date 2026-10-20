@@ -204,8 +204,15 @@ export function stripAddressPostalCode(value) {
   return text.trim();
 }
 
+export function normalizeAddressInput(value) {
+  return stripAddressPostalCode(value).replace(
+    /^((?:(?:台灣|臺灣)?屏東縣)?東港)(?!鎮)(?=\s*[\p{Script=Han}]+(?:路|街|大道)(?:[一二三四五六七八九十\d]+段)?(?:\d|$))/u,
+    "$1鎮"
+  );
+}
+
 function cleanPlace(value) {
-  return stripAddressPostalCode(String(value || "")
+  return normalizeAddressInput(String(value || "")
     .replace(/^(?:從|上車(?:地點)?)[：:\s]*/u, "")
     .replace(/^(?:到|至|前往|下車(?:地點)?)[：:\s]*/u, "")
     .replace(/^[,\/;:：\s]+|[,\/;:：\s]+$/g, "")
