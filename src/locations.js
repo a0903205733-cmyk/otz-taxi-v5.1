@@ -112,6 +112,15 @@ export async function validateLocation(value, apiKey) {
     try {
       return await lookup(candidate, apiKey);
     } catch (error) {
+      // Village names can change; retry only while keeping explicit city,
+      // district, road and house number, with all normal checks still enabled.
+      const withoutVillage = candidate.kind === "address" ? candidate.query.replace(
+        /^((?:台灣|臺灣)?[\p{Script=Han}]{2,3}[縣市][\p{Script=Han}]{1,4}[區鄉鎮市])[\p{Script=Han}]{1,6}[村里](?=[\p{Script=Han}]+(?:路|街|大道).*\d+(?:[-之]\d+)?號)/u,
+        "$1"
+      ) : candidate.query;
+      if (error.allowAreaRetry && withoutVillage !== candidate.query) {
+        return await lookup({ ...candidate, query: withoutVillage }, apiKey);
+      }
       const townshipWithoutCounty = /^[\p{Script=Han}]{1,4}[鄉鎮]/u.test(candidate.query) &&
         !/[縣市]/u.test(candidate.query.split(/[鄉鎮]/u)[0]);
       if (!error.allowAreaRetry || !townshipWithoutCounty) throw error;

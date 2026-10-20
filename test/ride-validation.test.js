@@ -744,6 +744,27 @@ test("village-form address works for both ride confirmation and fare calculation
   assert.equal(calls.orders[0].status, "awaiting_customer");
 });
 
+test("customer Wanluan to Donggang form can retry a differing village without changing the house", async t => {
+  const pickup = "屏東縣萬巒鄉萬巒村褒忠路156號";
+  const destination = "屏東縣東港鎮共和里中山路5號";
+  const origin = geocodeResult({ formatted_address: `台灣${pickup}` });
+  origin.address_components[2].long_name = "萬巒鄉";
+  origin.address_components[3].long_name = "褒忠路";
+  origin.address_components[4].long_name = "156";
+  const target = geocodeResult({ place_id: "hospital", formatted_address: "台灣屏東縣東港鎮興台里中山路5號" });
+  target.address_components[4].long_name = "5";
+  target.address_components.push({ long_name: "興台里", types: ["neighborhood"] });
+  const { context, calls, event } = harness(t, { geocode: query => query.includes("褒忠路") ? [origin] : [target] });
+  await context.handleText(event(`${pickup}到 ${destination}`));
+  assert.equal(calls.confirmations.length, 1);
+  assert.equal(calls.confirmations[0].pickup, pickup);
+  assert.equal(calls.confirmations[0].destination, "屏東縣東港鎮中山路5號");
+  assert.equal(calls.orders.length, 0);
+  await context.handleText(event(`試算車資 ${pickup}到 ${destination}`));
+  assert.equal(calls.orders.length, 1);
+  assert.equal(calls.orders[0].destination, "屏東縣東港鎮中山路5號");
+});
+
 test("single pickup is allowed for rides but cannot produce a fare quote", async t => {
   const { context, calls, event } = harness(t);
   await context.handleText(event(TEMPLE));
