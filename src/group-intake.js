@@ -51,7 +51,14 @@ export function parseIntakeMention(event, mainBotId) {
     return { intakeCommand: "cancel", orderId: orderIds.length === 1 ? orderIds[0] : null,
       invalid: command !== "取消" || orderIds.length > 1 };
   }
+  if (isIntakeFollowUp(text)) return null;
   const parsed = parseRideRequest(text.trim());
-  if (!parsed.pickup) return null;
+  if (!parsed.pickup || isIntakeFollowUp(parsed.pickup) ||
+      (parsed.destination && isIntakeFollowUp(parsed.destination))) return null;
   return { ...parsed, rideDetails: "百回+30" };
+}
+
+function isIntakeFollowUp(value) {
+  const text = String(value || "").normalize("NFKC").replace(/[\s\p{P}]/gu, "");
+  return /^(?:(?:請問|不好意思|麻煩問一下))?(?:(?:還|現在|目前)?有(?:車|司機|人接單|人接)?(?:了)?(?:嗎|沒|沒有)|有人接(?:單)?(?:嗎|了嗎)|(?:車|司機)?(?:找到了嗎|找到了沒|還沒到嗎|到了嗎|多久到)|還在找(?:車)?嗎|還沒(?:嗎|好嗎)|可以嗎|好了嗎|好|好的|收到|了解|謝謝|謝謝你|感謝|沒關係|不用了)$/u.test(text);
 }

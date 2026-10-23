@@ -372,6 +372,22 @@ test("intake group only accepts real mentions of the receiving main bot", () => 
   assert.equal(parseIntakeMention(intakeEvent("@OTZ"), "main-bot"), null);
 });
 
+test("intake follow-up mentions never create or dispatch a new order", async t => {
+  const { context, calls } = harness(t);
+  for (const message of ["有嗎？", "有車嗎", "請問有車嗎？", "還有嗎", "有司機了嗎？", "找到了嗎", "車多久到", "收到", "謝謝", "沒關係", "上車地點：有嗎？"]) {
+    const event = intakeEvent(`@OTZ車隊 ${message}`);
+    event.message.mention.mentionees[0].length = 6;
+    assert.equal(parseIntakeMention(event, "main-bot"), null, message);
+    await context.handleLineEvent(event);
+  }
+  assert.equal(calls.orders.length, 0);
+  assert.equal(calls.intakeSource, undefined);
+  assert.equal(calls.replies.length, 0);
+  assert.equal(calls.google.length, 0);
+  assert.equal(parseIntakeMention(intakeEvent("@OTZ 上車地點：有嗎餐廳"), "main-bot").pickup, "有嗎餐廳");
+  assert.equal(parseIntakeMention(intakeEvent("@OTZ 謝謝咖啡店"), "main-bot").pickup, "謝謝咖啡店");
+});
+
 test("intake group copies addresses without Google and only acknowledges with 好", async t => {
   const { context, calls } = harness(t);
   await context.handleLineEvent(intakeEvent());
