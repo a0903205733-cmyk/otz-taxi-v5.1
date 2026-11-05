@@ -959,4 +959,26 @@ test("dispatch diagnostics read membership and quota without sending messages or
   assert.ok(requests.every(r => !r.init.method && !r.init.body));
   assert.ok(!JSON.stringify(result).includes("private-token"));
 });
+
+test("order-specific dispatch diagnostics validate the payload without invoking push", async () => {
+  const requests = [];
+  const context = vm.createContext({ process: { env: { LINE_CHANNEL_ACCESS_TOKEN: "private-token" } },
+    AbortSignal, encodeURIComponent, getDispatchGroupIds: () => ["configured-group"],
+    getOrder: async id => ({ id }), formatDispatchOrderText: order => `訂單:${order.id}`,
+    createDispatchTextMessage: text => ({ type: "textV2", text }),
+    fetch: async (url, init) => {
+      requests.push({ url, init });
+      return { status: 200, ok: true, json: async () => ({}) };
+    }
+  });
+  loadFunctions(context, ["getLineDispatchStatus"]);
+  const result = await context.getLineDispatchStatus(331);
+  assert.equal(result.validation.orderId, 331);
+  assert.equal(result.validation.status, 200);
+  const posts = requests.filter(r => r.init.method === "POST");
+  assert.equal(posts.length, 1);
+  assert.ok(posts[0].url.endsWith("/message/validate/push"));
+  assert.equal(JSON.parse(posts[0].init.body).messages[0].text, "訂單:331");
+  assert.ok(requests.every(r => !r.url.endsWith("/message/push")));
+});
 import { postalSuffixResult } from "./fixtures/locations.js";

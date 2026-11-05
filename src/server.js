@@ -1588,20 +1588,27 @@ app.get("/api/admin/line/webhook-events", adminAuth, async (_req, res) => {
   res.json({ ok: true, events: recentLineWebhookEvents });
 });
 
-app.get("/api/admin/line/dispatch-status", adminAuth, async (_req, res) => {
-  res.json(await getLineDispatchStatus());
+app.get("/api/admin/line/dispatch-status", adminAuth, async (req, res) => {
+  const orderId = req.query.orderId === undefined ? null : Number(req.query.orderId);
+  if (orderId !== null && (!Number.isSafeInteger(orderId) || orderId <= 0)) return res.status(400).json({ error: "Invalid order ID" });
+  try {
+    res.json(await getLineDispatchStatus(orderId));
+  } catch {
+    res.status(502).json({ error: "Dispatch diagnostics unavailable" });
+  }
 });
 
-async function getLineDispatchStatus() {
+async function getLineDispatchStatus(orderId = null) {
   const groupIds = getDispatchGroupIds();
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   if (!token) return { configured: false, groupIds };
-  const read = async path => {
+  const read = async (path, body) => {
     try {
       const response = await fetch(`https://api.line.me/v2/bot/${path}`, {
-        headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000)
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        ...(body ? { method: "POST", body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(8000)
       });
-      return { status: response.status, data: response.ok ? await response.json() : null };
+      return { status: response.status, data: await response.json() };
     } catch {
       return { status: null, data: null };
     }
@@ -1612,8 +1619,14 @@ async function getLineDispatchStatus() {
   ]);
   const limit = quota.data?.type === "limited" ? quota.data.value : null;
   const used = consumption.data?.totalUsage ?? null;
+  let validation = null;
+  if (orderId !== null) {
+    const order = await getOrder(orderId);
+    const result = await read("message/validate/push", { messages: [createDispatchTextMessage(formatDispatchOrderText(order))] });
+    validation = { orderId, status: result.status, error: result.status === 200 ? null : result.data };
+  }
   return {
-    configured: true, groupIds,
+    configured: true, groupIds, validation,
     groups: groups.map((result, index) => ({ groupId: groupIds[index], status: result.status,
       accessible: result.status === 200 && result.data?.groupId === groupIds[index] })),
     quota: { status: quota.status, consumptionStatus: consumption.status,
@@ -2226,7 +2239,15 @@ async function pushOrderToDispatchGroup(order) {
   const groupIds = getDispatchGroupIds();
   if (!groupIds.length || !order) return false;
 
-  const text = normalizeLineText(formatIntakeDispatch(order) || [
+  const text = formatDispatchOrderText(order);
+  const results = await pushDispatchLineMessages(groupIds, text);
+  console.log(`Order ${orderNo(order.id)} pushed to dispatch groups ${groupIds.join(",")} by ${results.map(item => item.account).join(",")}`);
+  scheduleDispatchSearchNotice(order);
+  return true;
+}
+
+function formatDispatchOrderText(order) {
+  return normalizeLineText(formatIntakeDispatch(order) || [
     `訂單:${orderNo(order.id)}`,
     formatRideRequestTemplate({
       pickup: order.pickup,
@@ -2237,10 +2258,6 @@ async function pushOrderToDispatchGroup(order) {
       rideDetails: order.ride_details
     })
   ].join("\n"));
-  const results = await pushDispatchLineMessages(groupIds, text);
-  console.log(`Order ${orderNo(order.id)} pushed to dispatch groups ${groupIds.join(",")} by ${results.map(item => item.account).join(",")}`);
-  scheduleDispatchSearchNotice(order);
-  return true;
 }
 
 function isDispatchTestCommand(text) {
