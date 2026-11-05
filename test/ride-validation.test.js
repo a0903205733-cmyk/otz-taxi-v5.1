@@ -466,7 +466,7 @@ test("exactly two unlabeled location lines mean pickup then destination", () => 
 // Run the actual handlers with isolated LINE/DB dependencies, without starting
 // Express, loading production secrets, or sending customer messages.
 function harness(t, options = {}) {
-  const calls = { google: [], replies: [], orders: [], confirmations: [], customerWrites: 0, formCleared: 0 };
+  const calls = { google: [], replies: [], orders: [], confirmations: [], dispatches: [], customerWrites: 0, formCleared: 0 };
   let fareIntent = Boolean(options.fareIntent);
   let pendingForm = options.form ? { allowLocationNotice: false } : null;
   t.mock.method(globalThis, "fetch", mapsFetch(calls.google, options));
@@ -502,13 +502,18 @@ function harness(t, options = {}) {
     orderNo: id => `OTZ-${id}`,
     formatRideRequestTemplate: values => `${values.pickup}\n${values.destination}`,
     getRideSearchNotice: () => "searching",
-    getDispatchGroupIds: () => ["test-group"],
-    pushDispatchLineMessages: async () => [],
+    getDispatchGroupIds: () => options.dispatchGroups || ["test-group"],
+    logLinePushError() {},
+    pushDispatchLineMessages: async (groups, text) => {
+      calls.dispatches.push({ groups, text });
+      if (options.dispatchError) throw new Error("LINE push rejected");
+      return options.emptyDispatchResult ? [] : groups.map(groupId => ({ groupId, account: "OTZ" }));
+    },
     normalizeLineText: text => text
   });
   for (const name of ["handleLineEvent", "handleText", "createLineRideOrder", "handleMutedText", "getVerifiedRideInput",
     "isFareQuoteKeyword", "isFareQuoteInlineRequest", "getValidatedCapturedRoute", "extractCapturedRoute", "dispatchTestOrder",
-    "replyLocationClarificationOnce"]) {
+    "replyLocationClarificationOnce", "isDispatchTestCommand"]) {
     const start = source.search(new RegExp(`^(?:async )?function ${name}\\(`, "m"));
     assert.ok(start >= 0, name);
     const rest = source.slice(start + 1);
@@ -887,5 +892,51 @@ test("test orders and capture forwarding cannot write unverified locations", asy
   assert.equal(await context.getValidatedCapturedRoute(event(invalid), invalid), null);
   const destinationOnly = `下車地址：${TEMPLE}`;
   assert.equal(await context.getValidatedCapturedRoute(event(destinationOnly), destinationOnly), null);
+});
+
+test("explicit test dispatch runs in a group with automatic ride detection disabled", async t => {
+  const { context, calls, event } = harness(t);
+  context.isRideDetectionDisabledSource = () => true;
+  const request = event(`測試派單：${ADDRESS}到${TEMPLE}`);
+  request.source = { type: "group", groupId: "test-group", userId: "test-user" };
+  request.destination = "main-bot";
+  await context.handleLineEvent(request);
+  assert.equal(calls.orders.length, 1);
+  assert.equal(calls.dispatches.length, 1);
+  assert.equal(calls.dispatches[0].groups.join(","), "test-group");
+  assert.match(calls.dispatches[0].text, /測試單\n訂單:OTZ-123/u);
+  assert.match(calls.replies[0], /測試單已派出/u);
+});
+
+test("test dispatch without targets does not create an order", async t => {
+  const { context, calls, event } = harness(t, { dispatchGroups: [] });
+  await context.dispatchTestOrder(event("測試派單"), `測試派單 ${ADDRESS}`);
+  assert.equal(calls.orders.length, 0);
+  assert.equal(calls.dispatches.length, 0);
+  assert.match(calls.replies[0], /未設定派單群組/u);
+});
+
+for (const options of [{ dispatchError: true }, { emptyDispatchResult: true }]) {
+  test(`failed test dispatch cannot report delivery success (${JSON.stringify(options)})`, async t => {
+    const { context, calls, event } = harness(t, options);
+    await context.dispatchTestOrder(event("測試派單"), `測試派單 ${ADDRESS}`);
+    assert.equal(calls.orders.length, 1);
+    assert.equal(calls.dispatches.length, 1);
+    assert.equal(calls.replies.length, 1);
+    assert.match(calls.replies[0], /已建立，但派送未完成\n訂單：OTZ-123/u);
+    assert.doesNotMatch(calls.replies[0], /測試單已派出/u);
+  });
+}
+
+test("dispatch helper rejects an empty destination list before any LINE call", async () => {
+  const context = vm.createContext({});
+  loadFunctions(context, ["pushDispatchLineMessages"]);
+  await assert.rejects(context.pushDispatchLineMessages([], "test"), /No LINE dispatch groups configured/u);
+});
+
+test("default dispatch destination is the single configured fleet group", () => {
+  const context = vm.createContext({ process: { env: {} } });
+  loadFunctions(context, ["getDispatchGroupIds"]);
+  assert.equal(context.getDispatchGroupIds().join(","), "Cebe9050e93e50d49a29f58cdc28a2fe2");
 });
 import { postalSuffixResult } from "./fixtures/locations.js";

@@ -195,6 +195,8 @@ async function handleLineEvent(event) {
       return replyLineSourceId(event);
     }
 
+    if (isDispatchTestCommand(incomingText)) return dispatchTestOrder(event, incomingText);
+
     if (isIntakeGroup(event)) {
       if (isDispatchBotTagged(event, incomingText) && !incomingText.includes("取消") &&
           (/(?:01-\d+|OTZ-\d+)/iu.test(incomingText) || isOnlyDispatchBotMention(normalizeMainBotMention(event, incomingText)))) {
@@ -290,7 +292,7 @@ async function handleText(event) {
     return;
   }
 
-  if (/^測試派單(?:\s|$)/u.test(incomingText)) {
+  if (isDispatchTestCommand(incomingText)) {
     return dispatchTestOrder(event, incomingText);
   }
   if (isFareQuoteKeyword(incomingText)) {
@@ -2207,12 +2209,18 @@ async function pushOrderToDispatchGroup(order) {
   return true;
 }
 
+function isDispatchTestCommand(text) {
+  return /^測試派單(?=[，,、:：\s]|$)/u.test(String(text || "").trim());
+}
+
 async function dispatchTestOrder(event, incomingText = "") {
+  const groupIds = getDispatchGroupIds();
+  if (!groupIds.length) return reply(event.replyToken, "測試單尚未建立：未設定派單群組。");
   const routeText = String(incomingText || "")
     .replace(/^測試派單[，,、:：\s]*/u, "")
     .trim();
   const parsed = await getVerifiedRideInput(parseRideRequest(routeText));
-  if (!parsed) return;
+  if (!parsed) return reply(event.replyToken, "測試單尚未建立：請在「測試派單」後提供可辨識的上車地點，可另附下車地點。");
   const settings = await listSettings();
   const pickup = parsed.pickup;
   const destination = parsed.destination || "尚未提供";
@@ -2247,17 +2255,19 @@ async function dispatchTestOrder(event, incomingText = "") {
   ].join("\n"));
 
   try {
-    const results = await pushDispatchLineMessages(getDispatchGroupIds(), text);
+    const results = await pushDispatchLineMessages(groupIds, text);
+    if (!results.length) throw new Error("No dispatch message was delivered");
     console.log(`Test order pushed to ${results.length} groups`);
-    return reply(event.replyToken, `測試單已派出\n訂單：${orderNo(order.id)}`);
   } catch (error) {
     logLinePushError("Test order dispatch failed", error);
-    return reply(event.replyToken, "測試單派出失敗，請確認 OTZ 主帳號已加入派單群組及訊息額度");
+    return reply(event.replyToken, `測試單已建立，但派送未完成\n訂單：${orderNo(order.id)}\n請確認 OTZ 主帳號已加入派單群組及訊息額度。`);
   }
+  return reply(event.replyToken, `測試單已派出\n訂單：${orderNo(order.id)}`);
 }
 
 async function pushDispatchLineMessages(groupIds, text, options = {}) {
   const ids = [...new Set(groupIds.map(groupId => String(groupId || "").trim()).filter(Boolean))];
+  if (!ids.length) throw new Error("No LINE dispatch groups configured");
   const dispatchText = withDispatchMentionAll(text);
   const results = [];
   const errors = [];
@@ -2389,7 +2399,7 @@ function getLinePushErrorDetails(error) {
 function getDispatchGroupIds() {
   return String(
     process.env.LINE_DISPATCH_GROUP_ID ||
-      "Cddc86808ba9af00baf20e85a8029b379"
+      "Cebe9050e93e50d49a29f58cdc28a2fe2"
   )
     .split(/[,\n\r]+/u)
     .map(groupId => groupId.trim())
