@@ -2240,10 +2240,28 @@ async function pushOrderToDispatchGroup(order) {
   if (!groupIds.length || !order) return false;
 
   const text = formatDispatchOrderText(order);
-  const results = await pushDispatchLineMessages(groupIds, text);
+  let results;
+  try {
+    results = await pushDispatchLineMessages(groupIds, text);
+  } catch (error) {
+    await recordOrderDispatch(order, groupIds, error.results || [], error);
+    throw error;
+  }
+  await recordOrderDispatch(order, groupIds, results);
   console.log(`Order ${orderNo(order.id)} pushed to dispatch groups ${groupIds.join(",")} by ${results.map(item => item.account).join(",")}`);
   scheduleDispatchSearchNotice(order);
   return true;
+}
+
+async function recordOrderDispatch(order, groupIds, results, error = null) {
+  try {
+    await createAuditLog({ actor_type: "system", entity_type: "order", entity_id: String(order.id),
+      action: error ? "order.dispatch_failed" : "order.dispatch_sent",
+      details: { groupIds, deliveries: results, error: error ? getLinePushErrorDetails(error) : null }
+    });
+  } catch (auditError) {
+    console.error("Unable to save order dispatch result:", auditError.message);
+  }
 }
 
 function formatDispatchOrderText(order) {

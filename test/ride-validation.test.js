@@ -940,6 +940,33 @@ test("default dispatch destination is the single configured fleet group", () => 
   assert.equal(context.getDispatchGroupIds().join(","), "Cebe9050e93e50d49a29f58cdc28a2fe2");
 });
 
+test("formal dispatch records success and failures without retrying the order", async () => {
+  const audits = [], notices = [];
+  let fail = false;
+  let sends = 0;
+  const context = vm.createContext({ console: { log() {}, error() {} },
+    getDispatchGroupIds: () => ["target"], formatDispatchOrderText: () => "order content",
+    pushDispatchLineMessages: async () => {
+      sends += 1;
+      if (fail) throw Object.assign(new Error("LINE rejected"), { status: 429 });
+      return [{ groupId: "target", account: "OTZ" }];
+    },
+    createAuditLog: async entry => audits.push(entry),
+    scheduleDispatchSearchNotice: order => notices.push(order.id),
+    orderNo: id => String(id)
+  });
+  loadFunctions(context, ["pushOrderToDispatchGroup", "recordOrderDispatch", "getLinePushErrorDetails"]);
+  assert.equal(await context.pushOrderToDispatchGroup({ id: 331 }), true);
+  assert.equal(audits[0].action, "order.dispatch_sent");
+  assert.equal(audits[0].details.deliveries[0].groupId, "target");
+  fail = true;
+  await assert.rejects(context.pushOrderToDispatchGroup({ id: 332 }), /LINE rejected/u);
+  assert.equal(audits[1].action, "order.dispatch_failed");
+  assert.equal(audits[1].details.error.status, 429);
+  assert.equal(sends, 2);
+  assert.equal(notices.length, 1);
+});
+
 test("dispatch diagnostics read membership and quota without sending messages or returning credentials", async () => {
   const requests = [];
   const context = vm.createContext({ process: { env: { LINE_CHANNEL_ACCESS_TOKEN: "private-token" } },
