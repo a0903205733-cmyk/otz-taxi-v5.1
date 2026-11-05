@@ -939,4 +939,24 @@ test("default dispatch destination is the single configured fleet group", () => 
   loadFunctions(context, ["getDispatchGroupIds"]);
   assert.equal(context.getDispatchGroupIds().join(","), "Cebe9050e93e50d49a29f58cdc28a2fe2");
 });
+
+test("dispatch diagnostics read membership and quota without sending messages or returning credentials", async () => {
+  const requests = [];
+  const context = vm.createContext({ process: { env: { LINE_CHANNEL_ACCESS_TOKEN: "private-token" } },
+    AbortSignal, encodeURIComponent, getDispatchGroupIds: () => ["configured-group"],
+    fetch: async (url, init) => {
+      requests.push({ url, init });
+      const data = url.endsWith("consumption") ? { totalUsage: 200 } :
+        url.endsWith("quota") ? { type: "limited", value: 200 } : { groupId: "configured-group" };
+      return { status: 200, ok: true, json: async () => data };
+    }
+  });
+  loadFunctions(context, ["getLineDispatchStatus"]);
+  const result = await context.getLineDispatchStatus();
+  assert.equal(result.groups[0].accessible, true);
+  assert.equal(result.quota.exhausted, true);
+  assert.equal(requests.length, 3);
+  assert.ok(requests.every(r => !r.init.method && !r.init.body));
+  assert.ok(!JSON.stringify(result).includes("private-token"));
+});
 import { postalSuffixResult } from "./fixtures/locations.js";

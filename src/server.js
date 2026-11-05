@@ -1588,6 +1588,40 @@ app.get("/api/admin/line/webhook-events", adminAuth, async (_req, res) => {
   res.json({ ok: true, events: recentLineWebhookEvents });
 });
 
+app.get("/api/admin/line/dispatch-status", adminAuth, async (_req, res) => {
+  res.json(await getLineDispatchStatus());
+});
+
+async function getLineDispatchStatus() {
+  const groupIds = getDispatchGroupIds();
+  const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  if (!token) return { configured: false, groupIds };
+  const read = async path => {
+    try {
+      const response = await fetch(`https://api.line.me/v2/bot/${path}`, {
+        headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(8000)
+      });
+      return { status: response.status, data: response.ok ? await response.json() : null };
+    } catch {
+      return { status: null, data: null };
+    }
+  };
+  const [quota, consumption, ...groups] = await Promise.all([
+    read("message/quota"), read("message/quota/consumption"),
+    ...groupIds.map(id => read(`group/${encodeURIComponent(id)}/summary`))
+  ]);
+  const limit = quota.data?.type === "limited" ? quota.data.value : null;
+  const used = consumption.data?.totalUsage ?? null;
+  return {
+    configured: true, groupIds,
+    groups: groups.map((result, index) => ({ groupId: groupIds[index], status: result.status,
+      accessible: result.status === 200 && result.data?.groupId === groupIds[index] })),
+    quota: { status: quota.status, consumptionStatus: consumption.status,
+      type: quota.data?.type ?? null, limit, used,
+      exhausted: typeof limit === "number" && typeof used === "number" ? used >= limit : null }
+  };
+}
+
 app.get("/api/admin/customers", adminAuth, async (_req, res) => {
   try {
     res.json(await listCustomers());
