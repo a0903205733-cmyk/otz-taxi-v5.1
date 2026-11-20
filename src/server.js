@@ -9,7 +9,7 @@ import {
 } from "./parser.js";
 import { getRoute, getPickupEtaMinutes } from "./maps.js";
 import { validateRideLocations } from "./locations.js";
-import { isIntakeGroup, getMainBotId, parseIntakeMention, formatIntakeDispatch } from "./group-intake.js";
+import { isIntakeGroup, getIntakeGroupIds, getMainBotId, parseIntakeMention, formatIntakeDispatch } from "./group-intake.js";
 import { calculateDonggangTownFare, calculateFare, isDonggangTownTrip } from "./fare.js";
 import { quoteFlex, orderNo } from "./messages.js";
 import {
@@ -116,23 +116,27 @@ app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
     return res.status(400).end();
   }
 
-  rememberLineWebhookEvents(body.events || []);
+  rememberLineWebhookEvents(body.events || [], body.destination);
 
   res.status(200).end();
 
   try {
     await Promise.all((body.events || []).map(event => handleLineEvent({ ...event, destination: body.destination })));
   } catch (error) {
+    rememberLineWebhookEvent({ ok: false, type: "handler_error", error: error.message,
+      status: error.statusCode || error.status || null });
     console.error("Webhook error:", error);
   }
 });
 
-function rememberLineWebhookEvents(events) {
+function rememberLineWebhookEvents(events, destination) {
   for (const event of events) {
     rememberLineWebhookEvent({
       ok: true,
       type: event?.type || "",
       source: event?.source || null,
+      destination: destination || null,
+      intakeGroup: isIntakeGroup(event),
       message: summarizeLineEventMessage(event),
       timestamp: event?.timestamp || null
     });
@@ -150,7 +154,8 @@ function rememberLineWebhookEvent(entry) {
 function summarizeLineEventMessage(event) {
   if (!event?.message) return null;
   const message = event.message;
-  if (message.type === "text") return { type: "text", text: message.text || "" };
+  if (message.type === "text") return { type: "text", text: message.text || "", id: message.id || null,
+    mention: message.mention || null, quotedMessageId: message.quotedMessageId || null };
   return {
     type: message.type || "",
     id: message.id || null
@@ -185,13 +190,16 @@ function isValidLineSignature(req) {
 
 async function handleLineEvent(event) {
   // Old A1-A4 webhooks must not create duplicate orders or consume reply tokens.
-  if (event.destination && event.destination !== await getMainBotId()) return;
+  if (event.destination && event.destination !== await getMainBotId()) {
+    rememberLineWebhookEvent({ ok: false, type: "routing_skipped", reason: "different_bot_destination", source: event.source });
+    return;
+  }
   const sourceKey = getLineSourceKey(event);
 
   if (event.type === "message" && event.message.type === "text") {
     const incomingText = String(event.message.text || "").trim();
 
-    if (incomingText === "查群組ID" || incomingText === "查ID") {
+    if (/^(?:查(?:詢)?群組\s*ID|查ID)$/iu.test(incomingText)) {
       return replyLineSourceId(event);
     }
 
@@ -203,7 +211,10 @@ async function handleLineEvent(event) {
         return handleDispatchBotTagged(event, incomingText);
       }
       const parsed = parseIntakeMention(event, await getMainBotId());
-      if (!parsed) return;
+      if (!parsed) {
+        rememberLineWebhookEvent({ ok: false, type: "intake_skipped", reason: "missing_or_invalid_bot_mention_or_content", source: event.source });
+        return;
+      }
       if (parsed.intakeCommand === "cancel") return cancelIntakeRide(event, parsed);
       return createLineRideOrder(event, parsed, false, await listSettings(), { intake: true });
     }
@@ -1613,8 +1624,8 @@ async function getLineDispatchStatus(orderId = null) {
       return { status: null, data: null };
     }
   };
-  const [quota, consumption, ...groups] = await Promise.all([
-    read("message/quota"), read("message/quota/consumption"),
+  const [quota, consumption, bot, ...groups] = await Promise.all([
+    read("message/quota"), read("message/quota/consumption"), read("info"),
     ...groupIds.map(id => read(`group/${encodeURIComponent(id)}/summary`))
   ]);
   const limit = quota.data?.type === "limited" ? quota.data.value : null;
@@ -1626,7 +1637,8 @@ async function getLineDispatchStatus(orderId = null) {
     validation = { orderId, status: result.status, error: result.status === 200 ? null : result.data };
   }
   return {
-    configured: true, groupIds, validation,
+    configured: true, groupIds, intakeGroupIds: getIntakeGroupIds(), validation,
+    bot: { status: bot.status, userId: bot.data?.userId ?? null, displayName: bot.data?.displayName ?? null },
     groups: groups.map((result, index) => ({ groupId: groupIds[index], status: result.status,
       accessible: result.status === 200 && result.data?.groupId === groupIds[index] })),
     quota: { status: quota.status, consumptionStatus: consumption.status,

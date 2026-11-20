@@ -17,8 +17,12 @@ export function formatIntakeDispatch(order) {
 let botCache = { token: "", id: "", expiresAt: 0 };
 
 export function isIntakeGroup(event) {
-  const groups = String(process.env.LINE_INTAKE_GROUP_IDS || DEFAULT_GROUPS.join(",")).split(/[,\r\n]+/u).map(value => value.trim());
-  return event.source?.type === "group" && groups.includes(event.source.groupId);
+  return event.source?.type === "group" && getIntakeGroupIds().includes(event.source.groupId);
+}
+
+export function getIntakeGroupIds() {
+  return String(process.env.LINE_INTAKE_GROUP_IDS || DEFAULT_GROUPS.join(",")).split(/[,\r\n]+/u)
+    .map(value => value.trim()).filter(Boolean);
 }
 
 export async function getMainBotId() {

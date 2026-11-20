@@ -428,6 +428,21 @@ test("intake group ignores untagged and empty messages but permits ID lookup", a
   assert.deepEqual(calls.replies, ["group-id"]);
 });
 
+test("group ID lookup accepts both query wordings in intake and dispatch groups", async t => {
+  const { context, calls } = harness(t);
+  for (const groupId of ["C0b0d5b3bce8b7d9cfe8eb2e133afeafa", "test-group"]) {
+    for (const text of ["查詢群組ID", "查群組ID", "查詢群組 ID", "查ID"]) {
+      const event = intakeEvent(text);
+      event.source.groupId = groupId;
+      delete event.message.mention;
+      await context.handleLineEvent(event);
+    }
+  }
+  assert.equal(calls.replies.length, 8);
+  assert.ok(calls.replies.every(text => text === "group-id"));
+  assert.equal(calls.orders.length, 0);
+});
+
 test("dispatch template retains the fixed intake note", () => {
   const start = source.indexOf("function formatRideRequestTemplate(");
   const end = source.indexOf("\nfunction ", start + 1);
@@ -475,6 +490,7 @@ function harness(t, options = {}) {
     process: { env: { GOOGLE_MAPS_API_KEY: "test-key" } },
     parseRideRequest, parseRideFormSubmission, classifyRideSchedule, stripRouteFareQuestion,
     isIntakeGroup, parseIntakeMention, getMainBotId: async () => "main-bot",
+    rememberLineWebhookEvent() {},
     getLineSourceKey: () => "group:intake", replyLineSourceId: () => calls.replies.push("group-id"),
     validateRideLocations, getRoute, calculateFare, calculateDonggangTownFare, isDonggangTownTrip,
     isDispatchBotTagged: () => false,
@@ -970,7 +986,7 @@ test("formal dispatch records success and failures without retrying the order", 
 test("dispatch diagnostics read membership and quota without sending messages or returning credentials", async () => {
   const requests = [];
   const context = vm.createContext({ process: { env: { LINE_CHANNEL_ACCESS_TOKEN: "private-token" } },
-    AbortSignal, encodeURIComponent, getDispatchGroupIds: () => ["configured-group"],
+    AbortSignal, encodeURIComponent, getIntakeGroupIds: () => ["intake-group"], getDispatchGroupIds: () => ["configured-group"],
     fetch: async (url, init) => {
       requests.push({ url, init });
       const data = url.endsWith("consumption") ? { totalUsage: 200 } :
@@ -982,7 +998,7 @@ test("dispatch diagnostics read membership and quota without sending messages or
   const result = await context.getLineDispatchStatus();
   assert.equal(result.groups[0].accessible, true);
   assert.equal(result.quota.exhausted, true);
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 4);
   assert.ok(requests.every(r => !r.init.method && !r.init.body));
   assert.ok(!JSON.stringify(result).includes("private-token"));
 });
@@ -990,7 +1006,7 @@ test("dispatch diagnostics read membership and quota without sending messages or
 test("order-specific dispatch diagnostics validate the payload without invoking push", async () => {
   const requests = [];
   const context = vm.createContext({ process: { env: { LINE_CHANNEL_ACCESS_TOKEN: "private-token" } },
-    AbortSignal, encodeURIComponent, getDispatchGroupIds: () => ["configured-group"],
+    AbortSignal, encodeURIComponent, getIntakeGroupIds: () => ["intake-group"], getDispatchGroupIds: () => ["configured-group"],
     getOrder: async id => ({ id }), formatDispatchOrderText: order => `訂單:${order.id}`,
     createDispatchTextMessage: text => ({ type: "textV2", text }),
     fetch: async (url, init) => {
