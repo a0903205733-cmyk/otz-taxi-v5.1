@@ -222,12 +222,12 @@ function cleanPlace(value) {
 function extractLabeledRideForm(value) {
   const lines = String(value || "").split(/\r?\n/u).map(line => line.replace(/\\\s*$/u, "").trim());
   const pickup = lines
-    .map(line => line.match(/上車(?:地點|地址)?(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u)?.[1] ??
-      line.match(/^上(?:\s*[：:]\s*|\s+)(.+)$/u)?.[1])
+    .map(line => line.match(/上車(?:地點|地址)?(?:（[^）]*）|\([^)]*\))?\s*[：:;；]\s*(.*)$/u)?.[1] ??
+      line.match(/^上(?:\s*[：:;；]\s*|\s+)(.+)$/u)?.[1])
     .find(text => String(text || "").trim());
   const destination = lines
-    .map(line => line.match(/(?:下車(?:地點|地址)?|目的地)(?:（[^）]*）|\([^)]*\))?\s*[：:]\s*(.*)$/u)?.[1] ??
-      line.match(/^下(?:\s*[：:]\s*|\s+)(.+)$/u)?.[1])
+    .map(line => line.match(/(?:下車(?:地點|地址)?|目的地)(?:（[^）]*）|\([^)]*\))?\s*[：:;；]\s*(.*)$/u)?.[1] ??
+      line.match(/^下(?:\s*[：:;；]\s*|\s+)(.+)$/u)?.[1])
     .find(text => String(text || "").trim());
 
   const nonEmptyLines = lines.filter(Boolean);

@@ -413,6 +413,27 @@ test("intake group copies addresses without Google and only acknowledges with �
   assert.deepEqual(calls.replies, ["好", "好", "好"]);
 });
 
+test("semicolon pickup label with trailing real OTZ mention creates and dispatches an intake order", async t => {
+  for (const separator of [";", "；"]) {
+    const body = `上${separator}屏東縣竹田鄉竹田村自強路37-9號\n下:內埔新時代\n+30回\n@OTZ車隊`;
+    const event = intakeEvent(body);
+    event.message.mention.mentionees[0].index = body.indexOf("@OTZ車隊");
+    event.message.mention.mentionees[0].length = 6;
+    const { context, calls } = harness(t);
+    const sent = [];
+    context.pushOrderToDispatchGroup = async order => { sent.push(order); return true; };
+    await context.handleLineEvent(event);
+    assert.equal(calls.orders.length, 1);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].pickup, "屏東縣竹田鄉竹田村自強路37-9號");
+    assert.equal(sent[0].destination, "內埔新時代");
+    assert.equal(sent[0].ride_details, "百回+30");
+    assert.deepEqual(calls.replies, ["好"]);
+    assert.equal(calls.google.length, 0);
+    assert.match(formatIntakeDispatch({ ...sent[0], id: 999 }), /訂單：01-00999/u);
+  }
+});
+
 test("intake group ignores untagged and empty messages but permits ID lookup", async t => {
   const { context, calls } = harness(t);
   const untagged = intakeEvent();
